@@ -33,13 +33,27 @@ export default function App() {
         const updatedSession = { ...activeSession, gameState: updatedState };
         setActiveSession(updatedSession);
         saveSession(updatedSession);
+        network.broadcastState(updatedState);
       } 
       else if (data.type === 'PLAYER_ROLL') {
-        const logMsg = `${data.payload.characterName} rolled ${data.payload.actionName}: ${data.payload.result} (Base: ${data.payload.rawRoll} + Mod: ${data.payload.modifier})`;
+        // Format the incoming roll into a rich, multi-line combat log
+        let logMsg = `⚔️ ${data.payload.characterName} used ${data.payload.actionName}\n🎲 Hit: ${data.payload.result} (Base ${data.payload.rawRoll} + ${data.payload.modifier})`;
+        if (data.payload.damage !== undefined) {
+          logMsg += `\n💥 Dmg: ${data.payload.damage} (Base ${data.payload.rawDmg} + ${data.payload.dmgMod})`;
+        }
+        
         const updatedState = { ...state, combatLog: [logMsg, ...(state.combatLog || [])].slice(0, 50) };
         const updatedSession = { ...activeSession, gameState: updatedState };
         setActiveSession(updatedSession);
         saveSession(updatedSession);
+        network.broadcastState(updatedState);
+      }
+      else if (data.type === 'UPDATE_JOURNAL') {
+        const updatedState = { ...state, journal: data.payload.text };
+        const updatedSession = { ...activeSession, gameState: updatedState };
+        setActiveSession(updatedSession);
+        saveSession(updatedSession);
+        network.broadcastState(updatedState);
       }
     }
   };
@@ -111,6 +125,7 @@ export default function App() {
             const updated = {...activeSession, gameState: state};
             setActiveSession(updated);
             saveSession(updated);
+            network?.broadcastState(state);
           }} />
         ) : (
           network && <PlayerScreen network={network} gameState={activeSession.gameState} />

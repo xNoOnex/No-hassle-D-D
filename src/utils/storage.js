@@ -27,8 +27,9 @@ export const createNewSession = (name, role) => {
     gameState: { 
       quest: 'Awaiting Orders...', 
       turn: 0, 
-      party: {}, // Stores connected player stats
-      timeline: { past: [], active: { title: 'Tavern Brawl', details: 'A fight breaks out.' }, upcoming: [] },
+      party: {},
+      journal: 'Campaign started...\n',
+      timeline: { past: [], active: { title: 'The Velvet Table', details: 'Madame Elara reads the cards.' }, upcoming: [] },
       combatLog: [] 
     },
     lastPlayed: Date.now()
