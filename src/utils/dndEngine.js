@@ -85,3 +85,32 @@ export const executeAttack = (hitStatScore, isProficient, profBonus, targetAc, w
 export const executeSavingThrow = (statScore, isProficient, profBonus, dc, rollType = 'normal') => {
   return executeCheck(statScore, isProficient, profBonus, rollType, dc);
 };
+
+// --- OFFICIAL SRD RULE CALCULATORS ---
+
+// Proficiency bonus scales automatically based on character level
+export const calculateProficiency = (level) => Math.ceil(level / 4) + 1;
+
+// Automates AC based on armor weight limits
+export const calculateAC = (armorBase = 10, armorType = 'unarmored', dexScore) => {
+  const dexMod = calculateMod(dexScore);
+  if (armorType === 'heavy') return armorBase; // Heavy armor ignores DEX
+  if (armorType === 'medium') return armorBase + Math.min(2, dexMod); // Medium caps DEX bonus at +2
+  return armorBase + dexMod; // Light armor and unarmored take full DEX bonus
+};
+
+// Automates Max HP calculation (Max at lvl 1, fixed average thereafter)
+export const calculateMaxHP = (hitDie, conScore, level) => {
+  const conMod = calculateMod(conScore);
+  const lvl1Hp = hitDie + conMod;
+  if (level === 1) return Math.max(1, lvl1Hp);
+  
+  const avgHitDie = Math.floor(hitDie / 2) + 1;
+  const subsequentHp = Math.max(1, avgHitDie + conMod) * (level - 1);
+  return lvl1Hp + subsequentHp;
+};
+
+// Calculates Passive Perception
+export const calculatePassivePerception = (wisScore, isProficient, level) => {
+  return 10 + calculateMod(wisScore) + (isProficient ? calculateProficiency(level) : 0);
+};

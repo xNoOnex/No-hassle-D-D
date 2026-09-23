@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, Users, Play, Plus, Wifi } from 'lucide-react';
+import { Shield, Users, Play, Wifi } from 'lucide-react';
 import { GameNetwork } from './utils/peerSync';
 import { getSessions, createNewSession, saveSession } from './utils/storage';
 import DMDashboard from './components/DMDashboard';
@@ -10,8 +10,6 @@ const generateRoomCode = () => Math.random().toString(36).substring(2, 6).toUppe
 export default function App() {
   const [sessions, setSessions] = useState([]);
   const [activeSession, setActiveSession] = useState(null);
-  
-  // Network & Join State
   const [network, setNetwork] = useState(null);
   const [status, setStatus] = useState('Disconnected');
   const [joinCode, setJoinCode] = useState('');
@@ -21,26 +19,37 @@ export default function App() {
     setSessions(getSessions().sort((a, b) => b.lastPlayed - a.lastPlayed));
   }, [activeSession]);
 
-  const handleNetworkData = (data) => {
+  const handleNetworkData = (data, senderConn) => {
     if (activeSession.role === 'player' && data.type === 'SYNC_STATE') {
       const updated = { ...activeSession, gameState: data.payload };
       setActiveSession(updated);
       saveSession(updated);
-    } else if (activeSession.role === 'dm' && data.type === 'PLAYER_ROLL') {
-      alert(`Player rolled a ${data.payload.result}!`);
-      // Future: automatically inject into DM combat log
+    } else if (activeSession.role === 'dm') {
+      const state = activeSession.gameState;
+      
+      if (data.type === 'SYNC_CHARACTER') {
+        const playerId = data.payload.id;
+        const updatedState = { ...state, party: { ...state.party, [playerId]: data.payload } };
+        const updatedSession = { ...activeSession, gameState: updatedState };
+        setActiveSession(updatedSession);
+        saveSession(updatedSession);
+      } 
+      else if (data.type === 'PLAYER_ROLL') {
+        const logMsg = `${data.payload.characterName} rolled ${data.payload.actionName}: ${data.payload.result} (Base: ${data.payload.rawRoll} + Mod: ${data.payload.modifier})`;
+        const updatedState = { ...state, combatLog: [logMsg, ...(state.combatLog || [])].slice(0, 50) };
+        const updatedSession = { ...activeSession, gameState: updatedState };
+        setActiveSession(updatedSession);
+        saveSession(updatedSession);
+      }
     }
   };
 
   const startSession = (session) => {
     let currentCode = session.roomCode;
-    
-    // Generate a fresh code if DM is hosting
     if (session.role === 'dm') {
       currentCode = generateRoomCode();
       session.roomCode = currentCode;
     }
-    
     setActiveSession(session);
     saveSession(session);
     setStatus(session.role === 'dm' ? 'Initializing Server...' : 'Awaiting Room Code...');
@@ -55,8 +64,6 @@ export default function App() {
     net.init(() => {
       setStatus(isHost ? 'Hosting Active' : 'Connected to DM');
       setNetwork(net);
-      
-      // Save code to session if player just joined
       if (!isHost) {
         const updated = { ...session, roomCode: code };
         setActiveSession(updated);
@@ -72,8 +79,6 @@ export default function App() {
     startSession(s);
   };
 
-  // --- RENDERS ---
-
   if (activeSession) {
     return (
       <div className="container">
@@ -82,7 +87,6 @@ export default function App() {
             <h2 style={{textTransform: 'uppercase'}}>{activeSession.name}</h2>
             <button className="btn-outline" style={{padding: '4px 8px', fontSize: '12px', width: 'auto'}} onClick={() => { setActiveSession(null); setNetwork(null); }}>Save & Exit</button>
           </div>
-          
           <div className="flex-center" style={{justifyContent: 'space-between'}}>
             <div className="flex-center" style={{color: status.includes('Active') || status.includes('Connected') ? 'var(--success)' : 'var(--text-muted)'}}>
               <Wifi size={16} /> <small>{status}</small>
