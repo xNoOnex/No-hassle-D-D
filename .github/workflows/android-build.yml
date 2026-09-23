@@ -17,21 +17,21 @@ jobs:
       with:
         node-version: '22'
 
-    - name: Setup Java JDK 21
+    - name: Setup Java JDK 17
       uses: actions/setup-java@v3
       with:
         distribution: 'zulu'
-        java-version: '21'
+        java-version: '17'
 
     - name: Install Dependencies
-      run: npm install
+      run: npm install --legacy-peer-deps
 
     - name: Build React App
       run: npm run build
 
     - name: Configure Capacitor & Android
       run: |
-        npm install @capacitor/android
+        npm install @capacitor/android --legacy-peer-deps
         npx cap add android
         npx cap sync android
 
