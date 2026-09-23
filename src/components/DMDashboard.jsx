@@ -1,182 +1,228 @@
 import React, { useState, useEffect } from 'react';
-import { executeAttack, calculateMod, rollPhysical } from '../utils/dndEngine';
-import { Plus, Swords, Save, MapPin, Skull, Target } from 'lucide-react';
-import { WEAPON_TEMPLATES } from '../data/srd';
+import { Users, Swords, Map, Gem, Skull, Plus, Save, Target, ArrowRight } from 'lucide-react';
+import { executeAttack } from '../utils/dndEngine';
 
 export default function DMDashboard({ network, gameState, setGameState }) {
-  const [view, setView] = useState('combat'); // 'combat' | 'creator'
+  const [activeTab, setActiveTab] = useState('campaign');
+
+  // --- LOCAL PERSISTENCE FOR DM ASSETS ---
+  const [bestiary, setBestiary] = useState(() => JSON.parse(localStorage.getItem('dnd_bestiary') || '[]'));
+  const [lootPool, setLootPool] = useState(() => JSON.parse(localStorage.getItem('dnd_loot') || '[]'));
   
-  // Persist custom monsters locally so they aren't lost on refresh
-  const [bestiary, setBestiary] = useState(() => {
-    const saved = localStorage.getItem('dnd_bestiary');
-    return saved ? JSON.parse(saved) : [];
-  });
+  useEffect(() => localStorage.setItem('dnd_bestiary', JSON.stringify(bestiary)), [bestiary]);
+  useEffect(() => localStorage.setItem('dnd_loot', JSON.stringify(lootPool)), [lootPool]);
 
+  // --- STATE ---
   const [activeMonsters, setActiveMonsters] = useState([]);
-  const [combatLog, setCombatLog] = useState([]);
+  const [generatedLoot, setGeneratedLoot] = useState(null);
 
-  // Form State for New Monster
-  const [newMonster, setNewMonster] = useState({
-    name: '', ac: 10, hp: 20, 
-    str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10,
-    location: 'Any', spawnRate: 'Common',
-    actions: [{ name: 'Claw', dmgSides: 6, dmgCount: 1, stat: 'str' }]
-  });
+  // Forms
+  const [newMonster, setNewMonster] = useState({ name: '', ac: 10, hp: 20, str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10, actions: [] });
+  const [newLoot, setNewLoot] = useState({ name: '', type: 'Weapon', rarity: 'Common', weight: 50, stats: '', description: '' });
+  const [newTimelineEvent, setNewTimelineEvent] = useState({ title: '', details: '' });
 
-  useEffect(() => {
-    localStorage.setItem('dnd_bestiary', JSON.stringify(bestiary));
-  }, [bestiary]);
-
-  const handleSaveMonster = () => {
-    if (!newMonster.name) return alert('Monster needs a name');
-    const monsterData = {
-      ...newMonster,
-      id: `m_${Date.now()}`,
-    };
-    setBestiary([...bestiary, monsterData]);
-    setView('combat');
+  // --- LOOT LOGIC ---
+  const saveLoot = () => {
+    if (!newLoot.name) return;
+    setLootPool([...lootPool, { ...newLoot, id: `loot_${Date.now()}`, weight: Number(newLoot.weight) }]);
+    setNewLoot({ name: '', type: 'Weapon', rarity: 'Common', weight: 50, stats: '', description: '' });
   };
 
-  const spawnMonster = (monster) => {
-    const instance = { ...monster, instanceId: Date.now(), hpCurrent: monster.hp };
-    setActiveMonsters([...activeMonsters, instance]);
-  };
-
-  const logEvent = (msg) => setCombatLog(prev => [msg, ...prev].slice(0, 5));
-
-  const rollMonsterAttack = (monster, action) => {
-    // In a full game, targetAc comes from the specific player selected. Using 15 as placeholder.
-    const targetAc = 15; 
-    const statScore = monster[action.stat]; // e.g., monster.str
-    const isProficient = true; 
-    const profBonus = 2; // Assuming CR 1-4 baseline
-
-    const result = executeAttack(statScore, isProficient, profBonus, targetAc, action);
+  const generateRandomLoot = () => {
+    if (lootPool.length === 0) return;
+    const totalWeight = lootPool.reduce((sum, item) => sum + item.weight, 0);
+    let random = Math.floor(Math.random() * totalWeight);
     
-    let logMsg = `${monster.name} attacks with ${action.name}: Rolled ${result.hitCheck.total} vs AC ${targetAc}. `;
-    if (result.isHit) {
-      logMsg += `HIT for ${result.damageResult.total} damage!`;
-    } else {
-      logMsg += `MISS.`;
+    for (const item of lootPool) {
+      if (random < item.weight) {
+        setGeneratedLoot(item);
+        return;
+      }
+      random -= item.weight;
     }
-    
-    logEvent(logMsg);
-    // Here you would also broadcast the damage to the targeted player's device
-    // network.sendAction('DAMAGE_PLAYER', { amount: result.damageResult.total, targetId: 'player_1' });
   };
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-      
-      {/* Tab Navigation */}
-      <div style={{ display: 'flex', gap: '10px' }}>
-        <button 
-          className={view === 'combat' ? 'btn-primary' : 'btn-outline'} 
-          onClick={() => setView('combat')}
-        >
-          <Swords size={18} style={{marginRight: '8px'}} /> Encounter
-        </button>
-        <button 
-          className={view === 'creator' ? 'btn-primary' : 'btn-outline'} 
-          onClick={() => setView('creator')}
-        >
-          <Plus size={18} style={{marginRight: '8px'}} /> Create
-        </button>
+  // --- TIMELINE LOGIC ---
+  const pushToPast = () => {
+    if (!gameState.timeline.active) return;
+    setGameState({
+      ...gameState,
+      timeline: {
+        ...gameState.timeline,
+        past: [gameState.timeline.active, ...gameState.timeline.past],
+        active: gameState.timeline.upcoming.length > 0 ? gameState.timeline.upcoming[0] : null,
+        upcoming: gameState.timeline.upcoming.slice(1)
+      }
+    });
+  };
+
+  const addUpcomingEvent = () => {
+    if (!newTimelineEvent.title) return;
+    setGameState({
+      ...gameState,
+      timeline: {
+        ...gameState.timeline,
+        upcoming: [...gameState.timeline.upcoming, newTimelineEvent]
+      }
+    });
+    setNewTimelineEvent({ title: '', details: '' });
+  };
+
+  // --- RENDERERS ---
+
+  const renderPartyTab = () => (
+    <div className="card">
+      <h3 style={{marginBottom: '16px'}}>Connected Party</h3>
+      {Object.keys(gameState.party).length === 0 ? (
+        <p style={{color: 'var(--text-muted)'}}>No players have synced their character sheets yet.</p>
+      ) : (
+        Object.values(gameState.party).map((player, i) => (
+          <div key={i} style={{background: 'var(--bg-dark)', padding: '12px', borderRadius: '8px', marginBottom: '10px'}}>
+            <div style={{display: 'flex', justifyContent: 'space-between', fontWeight: 'bold'}}>
+              <span>{player.name} ({player.class})</span>
+              <span style={{color: 'var(--success)'}}>HP: {player.hpCurrent}/{player.hpMax}</span>
+            </div>
+            <div style={{fontSize: '12px', color: 'var(--text-muted)', marginTop: '8px'}}>
+              AC: {player.ac} | STR {player.stats.str} | DEX {player.stats.dex} | INT {player.stats.int}
+            </div>
+            <div style={{fontSize: '12px', color: 'var(--accent)', marginTop: '4px'}}>
+              Weapon: {player.weapon?.name || 'Unarmed'}
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  );
+
+  const renderCampaignTab = () => (
+    <div style={{display: 'flex', flexDirection: 'column', gap: '16px'}}>
+      <div className="card" style={{borderLeft: '4px solid var(--accent)'}}>
+        <h3 style={{color: 'var(--accent)', marginBottom: '8px'}}>Active Scenario</h3>
+        {gameState.timeline.active ? (
+          <>
+            <h4>{gameState.timeline.active.title}</h4>
+            <p style={{color: 'var(--text-muted)', fontSize: '14px', marginTop: '4px'}}>{gameState.timeline.active.details}</p>
+            <button className="btn-outline flex-center" style={{marginTop: '12px', padding: '8px'}} onClick={pushToPast}>
+              Complete & Advance <ArrowRight size={16}/>
+            </button>
+          </>
+        ) : <p style={{color: 'var(--text-muted)'}}>No active scenario.</p>}
       </div>
 
-      {view === 'creator' && (
-        <div className="card">
-          <h3 style={{marginBottom: '16px'}}>Monster Forge</h3>
-          <input type="text" placeholder="MONSTER NAME" value={newMonster.name} onChange={e => setNewMonster({...newMonster, name: e.target.value})} />
-          
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
-            <div>
-              <label style={{fontSize: '12px', color: 'var(--text-muted)'}}>ARMOR CLASS (AC)</label>
-              <input type="number" value={newMonster.ac} onChange={e => setNewMonster({...newMonster, ac: Number(e.target.value)})} />
-            </div>
-            <div>
-              <label style={{fontSize: '12px', color: 'var(--text-muted)'}}>HIT POINTS (HP)</label>
-              <input type="number" value={newMonster.hp} onChange={e => setNewMonster({...newMonster, hp: Number(e.target.value)})} />
-            </div>
+      <div className="card">
+        <h3 style={{marginBottom: '16px'}}>Upcoming Queued</h3>
+        {gameState.timeline.upcoming.map((ev, i) => (
+          <div key={i} style={{background: 'var(--bg-dark)', padding: '12px', borderRadius: '8px', marginBottom: '8px'}}>
+            <strong>{ev.title}</strong>
+            <div style={{fontSize: '12px', color: 'var(--text-muted)'}}>{ev.details}</div>
           </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
-            <div>
-              <label style={{fontSize: '12px', color: 'var(--text-muted)'}}>SPAWN LOCATION</label>
-              <input type="text" placeholder="e.g. Dark Forest" value={newMonster.location} onChange={e => setNewMonster({...newMonster, location: e.target.value})} />
-            </div>
-            <div>
-              <label style={{fontSize: '12px', color: 'var(--text-muted)'}}>SPAWN RATE</label>
-              <select 
-                style={{ width: '100%', padding: '14px', borderRadius: '8px', background: 'var(--bg-dark)', color: 'white', border: '1px solid var(--surface)' }}
-                value={newMonster.spawnRate} 
-                onChange={e => setNewMonster({...newMonster, spawnRate: e.target.value})}
-              >
-                <option>Common</option>
-                <option>Uncommon</option>
-                <option>Rare</option>
-                <option>Boss</option>
-              </select>
-            </div>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '5px', marginBottom: '16px' }}>
-            {['str', 'dex', 'con', 'int', 'wis', 'cha'].map(stat => (
-              <div key={stat}>
-                <label style={{fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase'}}>{stat}</label>
-                <input type="number" value={newMonster[stat]} onChange={e => setNewMonster({...newMonster, [stat]: Number(e.target.value)})} />
-              </div>
-            ))}
-          </div>
-
-          <button className="btn-primary flex-center" onClick={handleSaveMonster}>
-            <Save size={20} /> Save to Bestiary
-          </button>
+        ))}
+        <div style={{display: 'flex', gap: '8px', marginTop: '12px'}}>
+          <input type="text" placeholder="Title" value={newTimelineEvent.title} onChange={e => setNewTimelineEvent({...newTimelineEvent, title: e.target.value})} style={{marginBottom: 0}} />
+          <button className="btn-primary" onClick={addUpcomingEvent}><Plus size={20}/></button>
         </div>
-      )}
+      </div>
 
-      {view === 'combat' && (
-        <>
-          <div className="card">
-            <h3 style={{marginBottom: '16px'}}>Bestiary / Spawner</h3>
-            {bestiary.length === 0 ? <p style={{color: 'var(--text-muted)'}}>No monsters created yet.</p> : null}
-            <div style={{display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '10px'}}>
-              {bestiary.map(mob => (
-                <button key={mob.id} className="btn-outline" style={{minWidth: '140px', padding: '8px'}} onClick={() => spawnMonster(mob)}>
-                  {mob.name} <br/><small style={{color: 'var(--text-muted)'}}>{mob.location} • {mob.spawnRate}</small>
-                </button>
-              ))}
-            </div>
+      <div className="card" style={{opacity: 0.7}}>
+        <h3 style={{marginBottom: '16px'}}>Past Events</h3>
+        {gameState.timeline.past.map((ev, i) => (
+          <div key={i} style={{padding: '8px 0', borderBottom: '1px solid var(--surface)'}}>
+            <strong style={{fontSize: '14px'}}>{ev.title}</strong>
           </div>
+        ))}
+      </div>
+    </div>
+  );
 
-          <div className="card">
-            <h3 style={{marginBottom: '16px'}}>Active Encounter</h3>
-            {activeMonsters.length === 0 ? <p style={{color: 'var(--text-muted)'}}>Encounter is clear.</p> : null}
-            
-            {activeMonsters.map(mob => (
+  const renderLootTab = () => (
+    <div style={{display: 'flex', flexDirection: 'column', gap: '16px'}}>
+      <div className="card flex-center" style={{flexDirection: 'column', textAlign: 'center'}}>
+        <button className="btn-primary flex-center" style={{padding: '20px', fontSize: '18px'}} onClick={generateRandomLoot}>
+          <Gem size={24} /> Roll Random Loot
+        </button>
+        {generatedLoot && (
+          <div style={{background: 'var(--bg-dark)', padding: '16px', borderRadius: '8px', marginTop: '16px', width: '100%', border: '1px solid var(--accent)'}}>
+            <h3 style={{color: 'var(--accent)'}}>{generatedLoot.name}</h3>
+            <div style={{fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px'}}>{generatedLoot.rarity} {generatedLoot.type}</div>
+            <p style={{fontSize: '14px', marginBottom: '8px'}}>{generatedLoot.description}</p>
+            <div style={{fontSize: '12px', fontWeight: 'bold'}}>Stats: {generatedLoot.stats}</div>
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <h3 style={{marginBottom: '16px'}}>Loot Forge</h3>
+        <input type="text" placeholder="ITEM NAME" value={newLoot.name} onChange={e => setNewLoot({...newLoot, name: e.target.value})} />
+        <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px'}}>
+          <select value={newLoot.type} onChange={e => setNewLoot({...newLoot, type: e.target.value})} style={{padding: '14px', borderRadius: '8px', background: 'var(--bg-dark)', color: 'white', border: '1px solid var(--surface)'}}>
+            <option>Weapon</option><option>Armor</option><option>Consumable</option><option>Artifact</option>
+          </select>
+          <input type="number" placeholder="Drop Weight (e.g. 50)" value={newLoot.weight} onChange={e => setNewLoot({...newLoot, weight: e.target.value})} />
+        </div>
+        <input type="text" placeholder="STATS (e.g. +2 STR, 1d8 Fire)" value={newLoot.stats} onChange={e => setNewLoot({...newLoot, stats: e.target.value})} />
+        <input type="text" placeholder="LORE / DESCRIPTION" value={newLoot.description} onChange={e => setNewLoot({...newLoot, description: e.target.value})} />
+        <button className="btn-outline flex-center" onClick={saveLoot}><Save size={18}/> Add to Pool</button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', paddingBottom: '40px' }}>
+      
+      {/* Top Navigation Bar */}
+      <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '8px', borderBottom: '1px solid var(--surface)' }}>
+        {[ 
+          { id: 'campaign', icon: Map, label: 'Campaign' },
+          { id: 'party', icon: Users, label: 'Party' },
+          { id: 'combat', icon: Swords, label: 'Combat' },
+          { id: 'loot', icon: Gem, label: 'Loot' },
+          { id: 'bestiary', icon: Skull, label: 'Bestiary' }
+        ].map(tab => (
+          <button 
+            key={tab.id}
+            className={activeTab === tab.id ? 'btn-primary' : 'btn-outline'} 
+            style={{ padding: '8px 12px', minWidth: 'max-content', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '14px' }}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            <tab.icon size={16} /> {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'party' && renderPartyTab()}
+      {activeTab === 'campaign' && renderCampaignTab()}
+      {activeTab === 'loot' && renderLootTab()}
+      
+      {activeTab === 'combat' && (
+        <div className="card">
+          <h3 style={{marginBottom: '16px'}}>Active Encounter</h3>
+          {activeMonsters.length === 0 ? <p style={{color: 'var(--text-muted)'}}>Encounter is clear.</p> : (
+            activeMonsters.map(mob => (
               <div key={mob.instanceId} style={{ background: 'var(--bg-dark)', padding: '12px', borderRadius: '8px', marginBottom: '10px' }}>
                 <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: '10px'}}>
                   <strong>{mob.name}</strong>
                   <span style={{color: 'var(--danger)'}}>HP: {mob.hpCurrent}/{mob.hp}</span>
                 </div>
-                
-                {mob.actions.map((act, idx) => (
-                  <button key={idx} className="btn-primary flex-center" style={{padding: '8px', fontSize: '14px', marginBottom: '5px'}} onClick={() => rollMonsterAttack(mob, act)}>
-                    <Target size={16} /> Use {act.name} (1d{act.dmgSides})
-                  </button>
-                ))}
               </div>
-            ))}
-          </div>
-
-          <div className="card">
-            <h3 style={{marginBottom: '16px'}}>Combat Log</h3>
-            <div style={{ fontSize: '14px', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {combatLog.length === 0 ? "Awaiting action..." : combatLog.map((log, i) => <div key={i}>• {log}</div>)}
-            </div>
-          </div>
-        </>
+            ))
+          )}
+        </div>
       )}
+
+      {activeTab === 'bestiary' && (
+        <div className="card">
+          <h3 style={{marginBottom: '16px'}}>Bestiary / Spawner</h3>
+          <p style={{color: 'var(--text-muted)', fontSize: '14px', marginBottom: '16px'}}>
+            Monsters created here will appear as buttons. Clicking them spawns them into the Combat tab.
+          </p>
+          {bestiary.map(mob => (
+            <button key={mob.id} className="btn-outline" style={{width: '100%', marginBottom: '8px'}} onClick={() => setActiveMonsters([...activeMonsters, { ...mob, instanceId: Date.now(), hpCurrent: mob.hp }])}>
+              Spawn {mob.name}
+            </button>
+          ))}
+        </div>
+      )}
+
     </div>
   );
 }
