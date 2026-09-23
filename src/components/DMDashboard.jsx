@@ -1,25 +1,93 @@
 import React, { useState, useEffect } from 'react';
-import { Users, Swords, Map, Gem, Skull, Plus, Save, Target, ArrowRight, Mic, MicOff, BookOpen, BookText } from 'lucide-react';
+import { Users, Swords, Map, Gem, Skull, Plus, Save, Target, Mic, MicOff, BookOpen, BookText, Trash2 } from 'lucide-react';
+import { calculateMod } from '../utils/dndEngine';
+
+const DEFAULT_BESTIARY = [
+  { id: 'm_goblin', name: 'Goblin Scout', ac: 13, hp: 7, str: 8, dex: 14, con: 10, int: 10, wis: 8, cha: 8, actions: [{ name: 'Shortbow', stat: 'dex', dmgSides: 6, dmgCount: 1 }] },
+  { id: 'm_snarl', name: 'Snarl (Wolf)', ac: 13, hp: 11, str: 12, dex: 15, con: 11, int: 3, wis: 12, cha: 6, actions: [{ name: 'Bite', stat: 'dex', dmgSides: 4, dmgCount: 1 }] },
+  { id: 'm_kargg', name: 'Kargg (Boss)', ac: 15, hp: 21, str: 14, dex: 14, con: 12, int: 10, wis: 8, cha: 10, actions: [{ name: 'Scimitar', stat: 'str', dmgSides: 6, dmgCount: 1 }] }
+];
+
+const DEFAULT_LOOT = [
+  { id: 'l_1', name: 'Elara’s Fortune Token', type: 'Artifact', rarity: 'Rare', weight: 30, stats: '+1 to Saves', description: 'A smooth wooden tile depicting a golden sun.' },
+  { id: 'l_2', name: 'Jace’s Spark-Blade', type: 'Weapon', rarity: 'Uncommon', weight: 15, stats: '1d6 Slash + 1d4 Lightning', description: 'A modified shortsword with copper wiring.' },
+  { id: 'l_3', name: 'Potion of Healing', type: 'Consumable', rarity: 'Common', weight: 100, stats: '2d4+2 HP', description: 'A classic red vial.' }
+];
 
 export default function DMDashboard({ network, gameState, setGameState }) {
   const [activeTab, setActiveTab] = useState('story');
-  const [bestiary, setBestiary] = useState(() => JSON.parse(localStorage.getItem('dnd_bestiary') || '[]'));
-  const [lootPool, setLootPool] = useState(() => JSON.parse(localStorage.getItem('dnd_loot') || '[]'));
+  
+  // Load from storage, or fallback to the pre-built story defaults
+  const [bestiary, setBestiary] = useState(() => {
+    const saved = localStorage.getItem('dnd_bestiary');
+    return saved && JSON.parse(saved).length > 0 ? JSON.parse(saved) : DEFAULT_BESTIARY;
+  });
+  
+  const [lootPool, setLootPool] = useState(() => {
+    const saved = localStorage.getItem('dnd_loot');
+    return saved && JSON.parse(saved).length > 0 ? JSON.parse(saved) : DEFAULT_LOOT;
+  });
   
   const [activeMonsters, setActiveMonsters] = useState([]);
+  const [generatedLoot, setGeneratedLoot] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   
-  // Speech Recognition Setup
+  // Forge States
+  const [newMonster, setNewMonster] = useState({ name: '', ac: 10, hp: 20, str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10, actionName: 'Strike', dmgSides: 6 });
+  const [newLoot, setNewLoot] = useState({ name: '', type: 'Weapon', rarity: 'Common', weight: 50, stats: '', description: '' });
+
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   const recognition = SpeechRecognition ? new SpeechRecognition() : null;
 
   useEffect(() => localStorage.setItem('dnd_bestiary', JSON.stringify(bestiary)), [bestiary]);
   useEffect(() => localStorage.setItem('dnd_loot', JSON.stringify(lootPool)), [lootPool]);
 
-  const handleJournalChange = (e) => {
-    const text = e.target.value;
-    setGameState({ ...gameState, journal: text });
-    if (network) network.broadcastState({ ...gameState, journal: text });
+  // --- ACTIONS ---
+  const spawnMonster = (mob) => setActiveMonsters([...activeMonsters, { ...mob, instanceId: Date.now(), hpCurrent: mob.hp }]);
+  const removeMonster = (id) => setActiveMonsters(activeMonsters.filter(m => m.instanceId !== id));
+  
+  const adjustMobHP = (id, amount) => {
+    setActiveMonsters(activeMonsters.map(m => m.instanceId === id ? { ...m, hpCurrent: Math.max(0, m.hpCurrent + amount) } : m));
+  };
+
+  const handleSaveMonster = () => {
+    if (!newMonster.name) return;
+    const customMob = {
+      id: `m_${Date.now()}`, name: newMonster.name, ac: newMonster.ac, hp: newMonster.hp,
+      str: newMonster.str, dex: newMonster.dex, con: newMonster.con, int: newMonster.int, wis: newMonster.wis, cha: newMonster.cha,
+      actions: [{ name: newMonster.actionName, stat: 'str', dmgSides: newMonster.dmgSides, dmgCount: 1 }]
+    };
+    setBestiary([...bestiary, customMob]);
+    setNewMonster({ name: '', ac: 10, hp: 20, str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10, actionName: 'Strike', dmgSides: 6 });
+  };
+
+  const handleSaveLoot = () => {
+    if (!newLoot.name) return;
+    setLootPool([...lootPool, { ...newLoot, id: `l_${Date.now()}`, weight: Number(newLoot.weight) }]);
+    setNewLoot({ name: '', type: 'Weapon', rarity: 'Common', weight: 50, stats: '', description: '' });
+  };
+
+  const rollMonsterAttack = (monster, action) => {
+    const statMod = calculateMod(monster[action.stat] || 10);
+    const hitRoll = Math.floor(Math.random() * 20) + 1;
+    const totalHit = hitRoll + statMod + 2; 
+    let dmgSum = 0;
+    for(let i=0; i < (action.dmgCount || 1); i++) dmgSum += Math.floor(Math.random() * (action.dmgSides || 6)) + 1;
+    
+    const logMsg = `🦇 ${monster.name} used ${action.name}\n🎲 Hit: ${totalHit} (Base ${hitRoll} + ${statMod + 2})\n💥 Dmg: ${dmgSum + statMod} (Base ${dmgSum} + ${statMod})`;
+    const updatedState = { ...gameState, combatLog: [logMsg, ...(gameState.combatLog || [])].slice(0, 50) };
+    setGameState(updatedState);
+    if (network) network.broadcastState(updatedState);
+  };
+
+  const generateRandomLoot = () => {
+    if (lootPool.length === 0) return;
+    const totalWeight = lootPool.reduce((sum, item) => sum + item.weight, 0);
+    let random = Math.floor(Math.random() * totalWeight);
+    for (const item of lootPool) {
+      if (random < item.weight) return setGeneratedLoot(item);
+      random -= item.weight;
+    }
   };
 
   const toggleDictation = () => {
@@ -48,96 +116,16 @@ export default function DMDashboard({ network, gameState, setGameState }) {
   };
 
   // --- RENDERERS ---
-  const renderStoryTab = () => (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-      <div className="card" style={{ borderLeft: '4px solid var(--accent)' }}>
-        <h3 style={{color: 'var(--accent)', marginBottom: '8px'}}>Module: The Stolen Core of Oakhaven</h3>
-        <p style={{fontSize: '14px', color: 'var(--text-muted)'}}>A beginner adventure for a newly forged party. Read the bold text aloud to your players.</p>
-      </div>
-
-      <div className="card">
-        <h4 style={{marginBottom: '8px'}}>Act 1: The Velvet Table</h4>
-        <p style={{fontSize: '14px', fontStyle: 'italic', marginBottom: '8px'}}>
-          "You sit in the dimly lit parlor of Madame Elara. The air smells of pine and old parchment. The town's power crystal was stolen last night, but Elara called you here for a different reason: destiny."
-        </p>
-        <div style={{background: 'var(--bg-dark)', padding: '10px', borderRadius: '8px', fontSize: '12px'}}>
-          <strong>NPC: Madame Elara (Neutral Ally)</strong>
-          <ul style={{marginLeft: '16px', marginTop: '4px', color: 'var(--text-muted)'}}>
-            <li>Warm, mysterious. Uses a deck of illustrated cards to divine the future.</li>
-            <li><strong>DM Tip:</strong> If you have a real tarot deck, draw three cards at the table (Past, Present, Future). Ask the players for their real birth dates and pretend to calculate their numerology life paths to bind them as a team.</li>
-            <li><strong>Goal:</strong> Force the players to agree on a "Party Name" before leaving the tent.</li>
-          </ul>
-        </div>
-      </div>
-
-      <div className="card">
-        <h4 style={{marginBottom: '8px'}}>Act 2: The Whispering Woods</h4>
-        <p style={{fontSize: '14px', fontStyle: 'italic', marginBottom: '8px'}}>
-          "Following a trail of dropped gears, you reach a rushing river. The old stone bridge has collapsed into the water."
-        </p>
-        <div style={{background: 'var(--bg-dark)', padding: '10px', borderRadius: '8px', fontSize: '12px', marginBottom: '8px'}}>
-          <strong>Obstacle: The Broken Bridge</strong>
-          <ul style={{marginLeft: '16px', marginTop: '4px', color: 'var(--text-muted)'}}>
-            <li>Athletics (DC 12) to jump it. Acrobatics (DC 12) to balance on a log.</li>
-            <li>Failure: Fall in mud, take 1d4 Bludgeoning damage.</li>
-          </ul>
-        </div>
-        <div style={{background: 'var(--surface)', padding: '10px', borderRadius: '8px', fontSize: '12px', border: '1px solid var(--danger)'}}>
-          <strong>Encounter: Goblin Scouts</strong>
-          <p style={{color: 'var(--text-muted)', marginTop: '4px'}}>Once they cross, two Goblins drop from the trees. Use the Bestiary tab to spawn two 'Goblin Scouts'.</p>
-        </div>
-      </div>
-
-      <div className="card">
-        <h4 style={{marginBottom: '8px'}}>Act 3: The Crumbling Ruins</h4>
-        <p style={{fontSize: '14px', fontStyle: 'italic', marginBottom: '8px'}}>
-          "In a ruined stone courtyard, a large goblin is trying to pry open the glowing crystal. A mangy wolf growls at his side."
-        </p>
-        <div style={{background: 'var(--bg-dark)', padding: '10px', borderRadius: '8px', fontSize: '12px', marginBottom: '8px'}}>
-          <strong>Adaptation Hooks (If players go off-script)</strong>
-          <ul style={{marginLeft: '16px', marginTop: '4px', color: 'var(--text-muted)'}}>
-            <li><strong>If they use Stealth (DC 13):</strong> Let them attack first with Advantage.</li>
-            <li><strong>If they try to talk/negotiate:</strong> The boss (Kargg) is greedy. If they offer 50+ gold, he might trade the crystal and walk away.</li>
-          </ul>
-        </div>
-        <div style={{background: 'var(--surface)', padding: '10px', borderRadius: '8px', fontSize: '12px', border: '1px solid var(--danger)'}}>
-          <strong>Boss Fight: Kargg & Snarl</strong>
-          <p style={{color: 'var(--text-muted)', marginTop: '4px'}}>Spawn 'Kargg (Boss)' and 'Snarl (Wolf)'. The wolf attacks the highest AC player. Kargg shoots from afar until the wolf dies.</p>
-        </div>
-      </div>
-    </div>
-  );
-
-  const renderJournalTab = () => (
-    <div className="card" style={{display: 'flex', flexDirection: 'column', gap: '16px'}}>
-      <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-        <h3>Campaign Journal</h3>
-        <button className={isRecording ? 'btn-primary' : 'btn-outline'} style={{width: 'auto', padding: '8px', background: isRecording ? 'var(--danger)' : 'transparent', borderColor: isRecording ? 'var(--danger)' : 'var(--accent)', color: isRecording ? 'white' : 'var(--accent)'}} onClick={toggleDictation}>
-          {isRecording ? <MicOff size={18} /> : <Mic size={18} />}
-        </button>
-      </div>
-      <p style={{fontSize: '12px', color: 'var(--text-muted)'}}>Type or dictate notes here. This journal syncs live to all players' screens.</p>
-      <textarea 
-        value={gameState.journal || ''} 
-        onChange={handleJournalChange}
-        style={{width: '100%', minHeight: '300px', background: 'var(--bg-dark)', color: 'white', border: '1px solid var(--surface)', padding: '12px', borderRadius: '8px', fontSize: '14px', lineHeight: '1.5'}}
-      />
-    </div>
-  );
-
-  // Note: renderPartyTab, renderCampaignTab, renderCombatTab, renderLootTab, renderBestiaryTab omitted for brevity but remain unchanged from previous versions.
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', paddingBottom: '40px' }}>
       <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '8px', borderBottom: '1px solid var(--surface)' }}>
         {[ 
           { id: 'story', icon: BookOpen, label: 'Story' },
           { id: 'journal', icon: BookText, label: 'Journal' },
-          { id: 'campaign', icon: Map, label: 'Timeline' },
           { id: 'party', icon: Users, label: 'Party' },
           { id: 'combat', icon: Swords, label: 'Combat' },
-          { id: 'loot', icon: Gem, label: 'Loot' },
-          { id: 'bestiary', icon: Skull, label: 'Bestiary' }
+          { id: 'bestiary', icon: Skull, label: 'Bestiary' },
+          { id: 'loot', icon: Gem, label: 'Loot' }
         ].map(tab => (
           <button 
             key={tab.id}
@@ -150,33 +138,172 @@ export default function DMDashboard({ network, gameState, setGameState }) {
         ))}
       </div>
 
-      {activeTab === 'story' && renderStoryTab()}
-      {activeTab === 'journal' && renderJournalTab()}
-      
-      {/* Existing Tabs */}
-      {activeTab === 'combat' && (
+      {activeTab === 'story' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div className="card" style={{ borderLeft: '4px solid var(--accent)' }}>
+            <h3 style={{color: 'var(--accent)', marginBottom: '8px'}}>Module: The Stolen Core of Oakhaven</h3>
+            <p style={{fontSize: '14px', color: 'var(--text-muted)'}}>Read the bold italic text aloud to your players.</p>
+          </div>
+          <div className="card">
+            <h4 style={{marginBottom: '8px'}}>Act 1: The Velvet Table</h4>
+            <p style={{fontSize: '14px', fontStyle: 'italic', marginBottom: '8px'}}>
+              "You sit in the dimly lit parlor of Madame Elara. The air smells of pine and old parchment. The town's power crystal was stolen last night, but Elara called you here for a different reason: destiny."
+            </p>
+            <div style={{background: 'var(--bg-dark)', padding: '10px', borderRadius: '8px', fontSize: '12px'}}>
+              <strong>NPC: Madame Elara (Neutral Ally)</strong>
+              <ul style={{marginLeft: '16px', marginTop: '4px', color: 'var(--text-muted)'}}>
+                <li>Warm, mysterious. Uses a deck of illustrated cards to divine the future.</li>
+                <li><strong>Goal:</strong> Force the players to agree on a "Party Name" before leaving the tent.</li>
+              </ul>
+            </div>
+          </div>
+          <div className="card">
+            <h4 style={{marginBottom: '8px'}}>Act 2: The Whispering Woods</h4>
+            <p style={{fontSize: '14px', fontStyle: 'italic', marginBottom: '8px'}}>
+              "Following a trail of dropped gears, you reach a rushing river. The old stone bridge has collapsed into the water."
+            </p>
+            <div style={{background: 'var(--surface)', padding: '10px', borderRadius: '8px', fontSize: '12px', border: '1px solid var(--danger)'}}>
+              <strong>Encounter: Goblin Scouts</strong>
+              <p style={{color: 'var(--text-muted)', marginTop: '4px'}}>Once they cross, two Goblins drop from the trees. Use the Bestiary tab to spawn two 'Goblin Scouts'.</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'journal' && (
+        <div className="card" style={{display: 'flex', flexDirection: 'column', gap: '16px'}}>
+          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+            <h3>Campaign Journal</h3>
+            <button className={isRecording ? 'btn-primary' : 'btn-outline'} style={{width: 'auto', padding: '8px', background: isRecording ? 'var(--danger)' : 'transparent'}} onClick={toggleDictation}>
+              {isRecording ? <MicOff size={18} color="white"/> : <Mic size={18} />}
+            </button>
+          </div>
+          <textarea 
+            value={gameState.journal || ''} 
+            onChange={(e) => setGameState({...gameState, journal: e.target.value})}
+            style={{width: '100%', minHeight: '300px', background: 'var(--bg-dark)', color: 'white', border: '1px solid var(--surface)', padding: '12px', borderRadius: '8px'}}
+          />
+        </div>
+      )}
+
+      {activeTab === 'party' && (
         <div className="card">
-          <h3 style={{marginBottom: '16px'}}>Active Encounter</h3>
-          {activeMonsters.length === 0 ? <p style={{color: 'var(--text-muted)'}}>Encounter is clear.</p> : (
-            activeMonsters.map(mob => (
-              <div key={mob.instanceId} style={{ background: 'var(--bg-dark)', padding: '12px', borderRadius: '8px', marginBottom: '10px' }}>
-                <div style={{display: 'flex', justifyContent: 'space-between'}}>
-                  <strong>{mob.name}</strong>
-                  <span style={{color: 'var(--danger)'}}>HP: {mob.hpCurrent}/{mob.hp}</span>
+          <h3 style={{marginBottom: '16px'}}>Connected Party</h3>
+          {Object.keys(gameState.party || {}).length === 0 ? <p style={{color: 'var(--text-muted)'}}>No players connected.</p> : (
+            Object.values(gameState.party).map((player, i) => (
+              <div key={i} style={{background: 'var(--bg-dark)', padding: '12px', borderRadius: '8px', marginBottom: '10px'}}>
+                <div style={{display: 'flex', justifyContent: 'space-between', fontWeight: 'bold'}}>
+                  <span>{player.name} ({player.class})</span>
+                  <span style={{color: 'var(--success)'}}>HP: {player.hpCurrent}/{player.hpMax}</span>
+                </div>
+                <div style={{fontSize: '12px', color: 'var(--text-muted)', marginTop: '8px'}}>
+                  AC: {player.ac} | STR {player.stats.str} | DEX {player.stats.dex} | INT {player.stats.int}
                 </div>
               </div>
             ))
           )}
         </div>
       )}
+
+      {activeTab === 'combat' && (
+        <div style={{display: 'flex', flexDirection: 'column', gap: '16px'}}>
+          <div className="card">
+            <h3 style={{marginBottom: '16px'}}>Active Encounter</h3>
+            {activeMonsters.length === 0 ? <p style={{color: 'var(--text-muted)'}}>Encounter is clear.</p> : (
+              activeMonsters.map(mob => (
+                <div key={mob.instanceId} style={{ background: 'var(--bg-dark)', padding: '12px', borderRadius: '8px', marginBottom: '10px' }}>
+                  <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: '10px'}}>
+                    <strong>{mob.name}</strong>
+                    <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+                      <button onClick={() => adjustMobHP(mob.instanceId, -1)} style={{padding: '4px 8px', background: 'var(--surface)', color: 'white'}}>-</button>
+                      <span style={{color: 'var(--danger)'}}>{mob.hpCurrent}/{mob.hp}</span>
+                      <button onClick={() => adjustMobHP(mob.instanceId, 1)} style={{padding: '4px 8px', background: 'var(--surface)', color: 'white'}}>+</button>
+                      <button onClick={() => removeMonster(mob.instanceId)} style={{padding: '4px', background: 'transparent', color: 'var(--danger)'}}><Trash2 size={16}/></button>
+                    </div>
+                  </div>
+                  <div style={{display: 'flex', gap: '8px', overflowX: 'auto'}}>
+                    {mob.actions?.map((act, idx) => (
+                      <button key={idx} className="btn-primary flex-center" style={{padding: '8px', fontSize: '12px', minWidth: 'max-content'}} onClick={() => rollMonsterAttack(mob, act)}>
+                        <Target size={14} /> {act.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+          <div className="card">
+            <h3 style={{marginBottom: '16px'}}>Combat Log</h3>
+            <div style={{ fontSize: "14px", display: "flex", flexDirection: "column", gap: "8px" }}>
+              {gameState.combatLog?.length === 0 ? <span style={{color: "var(--text-muted)"}}>Awaiting action...</span> : gameState.combatLog?.map((log, i) => (
+                <div key={i} style={{background: "var(--bg-dark)", padding: "12px", borderRadius: "8px", whiteSpace: "pre-wrap", borderLeft: "2px solid var(--accent)"}}>{log}</div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {activeTab === 'bestiary' && (
-        <div className="card">
-          <h3 style={{marginBottom: '16px'}}>Bestiary / Spawner</h3>
-          {bestiary.map(mob => (
-            <button key={mob.id} className="btn-outline" style={{width: '100%', marginBottom: '8px'}} onClick={() => setActiveMonsters([...activeMonsters, { ...mob, instanceId: Date.now(), hpCurrent: mob.hp }])}>
-              Spawn {mob.name}
+        <div style={{display: 'flex', flexDirection: 'column', gap: '16px'}}>
+          <div className="card">
+            <h3 style={{marginBottom: '16px'}}>Bestiary / Spawner</h3>
+            <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px'}}>
+              {bestiary.map(mob => (
+                <button key={mob.id} className="btn-outline" style={{padding: '10px', fontSize: '12px'}} onClick={() => spawnMonster(mob)}>
+                  + Spawn {mob.name}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="card">
+            <h3 style={{marginBottom: '16px'}}>Monster Forge</h3>
+            <input type="text" placeholder="MONSTER NAME" value={newMonster.name} onChange={e => setNewMonster({...newMonster, name: e.target.value})} />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
+              <div><label style={{fontSize: '12px', color: 'var(--text-muted)'}}>ARMOR CLASS (AC)</label><input type="number" value={newMonster.ac} onChange={e => setNewMonster({...newMonster, ac: Number(e.target.value)})} /></div>
+              <div><label style={{fontSize: '12px', color: 'var(--text-muted)'}}>HIT POINTS (HP)</label><input type="number" value={newMonster.hp} onChange={e => setNewMonster({...newMonster, hp: Number(e.target.value)})} /></div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
+              <div><label style={{fontSize: '12px', color: 'var(--text-muted)'}}>ACTION NAME</label><input type="text" placeholder="e.g. Claw" value={newMonster.actionName} onChange={e => setNewMonster({...newMonster, actionName: e.target.value})} /></div>
+              <div><label style={{fontSize: '12px', color: 'var(--text-muted)'}}>DAMAGE DICE (e.g. 6 for 1d6)</label><input type="number" value={newMonster.dmgSides} onChange={e => setNewMonster({...newMonster, dmgSides: Number(e.target.value)})} /></div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '5px', marginBottom: '16px' }}>
+              {['str', 'dex', 'con', 'int', 'wis', 'cha'].map(stat => (
+                <div key={stat}><label style={{fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase'}}>{stat}</label><input type="number" value={newMonster[stat]} onChange={e => setNewMonster({...newMonster, [stat]: Number(e.target.value)})} /></div>
+              ))}
+            </div>
+            <button className="btn-primary flex-center" onClick={handleSaveMonster}><Save size={20} /> Save Custom Monster</button>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'loot' && (
+        <div style={{display: 'flex', flexDirection: 'column', gap: '16px'}}>
+          <div className="card flex-center" style={{flexDirection: 'column', textAlign: 'center'}}>
+            <button className="btn-primary flex-center" style={{padding: '20px', fontSize: '18px'}} onClick={generateRandomLoot}>
+              <Gem size={24} /> Roll Random Loot
             </button>
-          ))}
+            {generatedLoot && (
+              <div style={{background: 'var(--bg-dark)', padding: '16px', borderRadius: '8px', marginTop: '16px', width: '100%', border: '1px solid var(--accent)'}}>
+                <h3 style={{color: 'var(--accent)'}}>{generatedLoot.name}</h3>
+                <div style={{fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px'}}>{generatedLoot.rarity} {generatedLoot.type}</div>
+                <p style={{fontSize: '14px', marginBottom: '8px'}}>{generatedLoot.description}</p>
+                <div style={{fontSize: '12px', fontWeight: 'bold'}}>Stats: {generatedLoot.stats}</div>
+              </div>
+            )}
+          </div>
+          <div className="card">
+            <h3 style={{marginBottom: '16px'}}>Loot Forge</h3>
+            <input type="text" placeholder="ITEM NAME" value={newLoot.name} onChange={e => setNewLoot({...newLoot, name: e.target.value})} />
+            <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px'}}>
+              <select value={newLoot.type} onChange={e => setNewLoot({...newLoot, type: e.target.value})} style={{padding: '14px', borderRadius: '8px', background: 'var(--bg-dark)', color: 'white', border: '1px solid var(--surface)'}}>
+                <option>Weapon</option><option>Armor</option><option>Consumable</option><option>Artifact</option>
+              </select>
+              <input type="number" placeholder="Drop Weight (e.g. 50)" value={newLoot.weight} onChange={e => setNewLoot({...newLoot, weight: e.target.value})} />
+            </div>
+            <input type="text" placeholder="STATS (e.g. +2 STR, 1d8 Fire)" value={newLoot.stats} onChange={e => setNewLoot({...newLoot, stats: e.target.value})} />
+            <input type="text" placeholder="LORE / DESCRIPTION" value={newLoot.description} onChange={e => setNewLoot({...newLoot, description: e.target.value})} />
+            <button className="btn-outline flex-center" onClick={handleSaveLoot}><Save size={18}/> Add to Pool</button>
+          </div>
         </div>
       )}
     </div>
