@@ -47,8 +47,8 @@ jobs:
         KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
       run: |
-        # Safely decode the string using quotes and the ignore-garbage flag
-        echo "$KEYSTORE_BASE64" | base64 --decode --ignore-garbage > app.keystore
+        # Strip all invisible clipboard garbage and decode with OpenSSL
+        echo "$KEYSTORE_BASE64" | tr -d '\n\r ' | openssl base64 -d -A -out app.keystore
         
         export BUILD_TOOL=$(ls -d /usr/local/lib/android/sdk/build-tools/* | tail -1)
         
