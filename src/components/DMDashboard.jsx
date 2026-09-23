@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Users, Swords, Map, Gem, Skull, Plus, Save, Target, Mic, MicOff, BookOpen, BookText, Trash2 } from 'lucide-react';
+import { Users, Swords, Map, Gem, Skull, Save, Target, Mic, MicOff, BookOpen, BookText, Trash2, Play, SkipForward, Info } from 'lucide-react';
 import { calculateMod } from '../utils/dndEngine';
 
 const DEFAULT_BESTIARY = [
@@ -16,8 +16,8 @@ const DEFAULT_LOOT = [
 
 export default function DMDashboard({ network, gameState, setGameState }) {
   const [activeTab, setActiveTab] = useState('story');
+  const [showRules, setShowRules] = useState(false);
   
-  // Load from storage, or fallback to the pre-built story defaults
   const [bestiary, setBestiary] = useState(() => {
     const saved = localStorage.getItem('dnd_bestiary');
     return saved && JSON.parse(saved).length > 0 ? JSON.parse(saved) : DEFAULT_BESTIARY;
@@ -32,7 +32,6 @@ export default function DMDashboard({ network, gameState, setGameState }) {
   const [generatedLoot, setGeneratedLoot] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   
-  // Forge States
   const [newMonster, setNewMonster] = useState({ name: '', ac: 10, hp: 20, str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10, actionName: 'Strike', dmgSides: 6 });
   const [newLoot, setNewLoot] = useState({ name: '', type: 'Weapon', rarity: 'Common', weight: 50, stats: '', description: '' });
 
@@ -88,6 +87,50 @@ export default function DMDashboard({ network, gameState, setGameState }) {
       if (random < item.weight) return setGeneratedLoot(item);
       random -= item.weight;
     }
+  };
+
+  // --- INITIATIVE TRACKER LOGIC ---
+  const startEncounter = () => {
+    let order = [];
+    
+    // Roll for Players
+    Object.values(gameState.party || {}).forEach(p => {
+      const roll = Math.floor(Math.random() * 20) + 1;
+      const mod = p.initiative || 0;
+      order.push({ id: p.id, name: p.name, type: 'player', init: roll + mod, roll, mod });
+    });
+    
+    // Roll for Monsters
+    activeMonsters.forEach(m => {
+      const roll = Math.floor(Math.random() * 20) + 1;
+      const mod = calculateMod(m.dex || 10);
+      order.push({ id: m.instanceId, name: m.name, type: 'monster', init: roll + mod, roll, mod });
+    });
+    
+    // Sort highest to lowest
+    order.sort((a, b) => b.init - a.init);
+
+    const logMsg = `⚔️ Encounter Started! Initiative rolled for ${order.length} combatants.`;
+    const updatedState = { ...gameState, initiativeOrder: order, activeTurnIndex: 0, combatLog: [logMsg, ...(gameState.combatLog || [])].slice(0, 50) };
+    setGameState(updatedState);
+    if (network) network.broadcastState(updatedState);
+  };
+
+  const nextTurn = () => {
+    const nextIndex = (gameState.activeTurnIndex + 1) % gameState.initiativeOrder.length;
+    const activeChar = gameState.initiativeOrder[nextIndex];
+    const logMsg = `🔔 Top of the turn: It is now ${activeChar.name}'s turn.`;
+    
+    const updatedState = { ...gameState, activeTurnIndex: nextIndex, combatLog: [logMsg, ...(gameState.combatLog || [])].slice(0, 50) };
+    setGameState(updatedState);
+    if (network) network.broadcastState(updatedState);
+  };
+
+  const endEncounter = () => {
+    setActiveMonsters([]);
+    const updatedState = { ...gameState, initiativeOrder: [], activeTurnIndex: 0, combatLog: [`🛡️ Encounter Ended.`, ...(gameState.combatLog || [])].slice(0, 50) };
+    setGameState(updatedState);
+    if (network) network.broadcastState(updatedState);
   };
 
   const toggleDictation = () => {
@@ -207,8 +250,74 @@ export default function DMDashboard({ network, gameState, setGameState }) {
 
       {activeTab === 'combat' && (
         <div style={{display: 'flex', flexDirection: 'column', gap: '16px'}}>
+          
+          {/* INITIATIVE TRACKER */}
+          <div className="card" style={{border: '1px solid var(--accent)'}}>
+            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px'}}>
+              <h3 style={{color: 'var(--accent)'}}>Turn Tracker</h3>
+              {(!gameState.initiativeOrder || gameState.initiativeOrder.length === 0) ? (
+                <button className="btn-primary flex-center" style={{padding: '8px 12px', width: 'auto', fontSize: '14px'}} onClick={startEncounter} disabled={activeMonsters.length === 0}>
+                  <Play size={16} /> Engage
+                </button>
+              ) : (
+                <div style={{display: 'flex', gap: '8px'}}>
+                  <button className="btn-primary flex-center" style={{padding: '8px 12px', width: 'auto', fontSize: '14px'}} onClick={nextTurn}>
+                    <SkipForward size={16} /> Next
+                  </button>
+                  <button className="btn-outline flex-center" style={{padding: '8px 12px', width: 'auto', fontSize: '14px', borderColor: 'var(--danger)', color: 'var(--danger)'}} onClick={endEncounter}>
+                    End
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {gameState.initiativeOrder && gameState.initiativeOrder.length > 0 ? (
+              <div style={{display: 'flex', flexDirection: 'column', gap: '6px'}}>
+                {gameState.initiativeOrder.map((char, idx) => (
+                  <div key={idx} style={{
+                    display: 'flex', justifyContent: 'space-between', padding: '10px', borderRadius: '6px',
+                    background: idx === gameState.activeTurnIndex ? 'var(--accent)' : 'var(--bg-dark)',
+                    color: idx === gameState.activeTurnIndex ? 'white' : (char.type === 'monster' ? 'var(--danger)' : 'var(--text-main)')
+                  }}>
+                    <span style={{fontWeight: 'bold'}}>{idx === gameState.activeTurnIndex ? '▶ ' : ''}{char.name}</span>
+                    <span>Init: {char.init}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p style={{fontSize: '12px', color: 'var(--text-muted)'}}>Spawn monsters from the Bestiary, then click Engage to roll initiative for everyone.</p>
+            )}
+          </div>
+
+          {/* DM RULES CHEAT SHEET */}
           <div className="card">
-            <h3 style={{marginBottom: '16px'}}>Active Encounter</h3>
+            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer'}} onClick={() => setShowRules(!showRules)}>
+              <h4 style={{display: 'flex', alignItems: 'center', gap: '8px'}}><Info size={18} color="var(--accent)"/> DM Reference Guide</h4>
+              <span style={{color: 'var(--text-muted)'}}>{showRules ? 'Hide' : 'Show'}</span>
+            </div>
+            {showRules && (
+              <div style={{marginTop: '16px', fontSize: '12px', color: 'var(--text-muted)'}}>
+                <p style={{marginBottom: '8px'}}>On their turn, players can <strong>Move</strong>, take one <strong>Action</strong>, and have one free <strong>Object Interaction</strong>.</p>
+                <strong style={{color: 'white'}}>Standard Actions:</strong>
+                <ul style={{marginLeft: '16px', marginBottom: '8px'}}>
+                  <li><strong>Attack:</strong> Roll an attack with an equipped weapon.</li>
+                  <li><strong>Dash:</strong> Double your movement speed for the turn.</li>
+                  <li><strong>Disengage:</strong> Move away without triggering opportunity attacks.</li>
+                  <li><strong>Dodge:</strong> Enemy attacks have Disadvantage until your next turn.</li>
+                  <li><strong>Hide:</strong> Roll Stealth to become unseen.</li>
+                  <li><strong>Help:</strong> Give an ally Advantage on their next roll.</li>
+                  <li><strong>Ready:</strong> Prepare an action to trigger later (e.g., "If the goblin moves, I shoot").</li>
+                </ul>
+                <strong style={{color: 'white'}}>Free Object Interactions:</strong>
+                <ul style={{marginLeft: '16px'}}>
+                  <li>Draw/sheathe a sword, open a door, pull a torch from a sconce, drink a potion, hand an item to an ally.</li>
+                </ul>
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <h3 style={{marginBottom: '16px'}}>Active Monsters</h3>
             {activeMonsters.length === 0 ? <p style={{color: 'var(--text-muted)'}}>Encounter is clear.</p> : (
               activeMonsters.map(mob => (
                 <div key={mob.instanceId} style={{ background: 'var(--bg-dark)', padding: '12px', borderRadius: '8px', marginBottom: '10px' }}>
@@ -232,6 +341,7 @@ export default function DMDashboard({ network, gameState, setGameState }) {
               ))
             )}
           </div>
+          
           <div className="card">
             <h3 style={{marginBottom: '16px'}}>Combat Log</h3>
             <div style={{ fontSize: "14px", display: "flex", flexDirection: "column", gap: "8px" }}>
