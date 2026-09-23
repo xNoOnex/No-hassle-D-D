@@ -1,0 +1,22 @@
+:root {
+  --bg-dark: #0f172a;
+  --surface: #1e293b;
+  --text-main: #f8fafc;
+  --text-muted: #94a3b8;
+  --accent: #8b5cf6;
+  --danger: #ef4444;
+  --success: #22c55e;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, sans-serif; }
+body { background-color: var(--bg-dark); color: var(--text-main); -webkit-tap-highlight-color: transparent; }
+button { border: none; border-radius: 8px; padding: 12px 20px; font-weight: bold; font-size: 16px; cursor: pointer; transition: opacity 0.2s; }
+button:active { opacity: 0.8; }
+.btn-primary { background-color: var(--accent); color: white; width: 100%; }
+.btn-outline { background-color: transparent; border: 2px solid var(--accent); color: var(--accent); width: 100%; }
+input { width: 100%; padding: 14px; border-radius: 8px; border: 1px solid var(--surface); background: var(--bg-dark); color: white; font-size: 18px; margin-bottom: 16px; text-transform: uppercase; text-align: center; letter-spacing: 2px;}
+.container { padding: 20px; max-width: 600px; margin: 0 auto; min-height: 100vh; display: flex; flex-direction: column; gap: 16px; }
+.card { background: var(--surface); padding: 20px; border-radius: 12px; border: 1px solid #334155; }
+.header { text-align: center; padding: 40px 0 20px 0; }
+.header h1 { font-size: 28px; margin-bottom: 8px; }
+.flex-center { display: flex; align-items: center; justify-content: center; gap: 12px; }

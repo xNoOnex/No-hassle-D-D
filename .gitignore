@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+.env.*
+*.keystore
+tot.keystore
+*.jks
+android/
+ios/
