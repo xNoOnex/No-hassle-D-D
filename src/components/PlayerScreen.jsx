@@ -1,9 +1,30 @@
 import React, { useState, useEffect } from 'react';
-import { Swords, Shield, Heart, User, CheckCircle } from 'lucide-react';
+import { Swords, Shield, Heart, User, CheckCircle, Dice5 } from 'lucide-react';
 import { calculateMod, calculateProficiency, calculateAC, calculateMaxHP } from '../utils/dndEngine';
 import { RACES, CLASSES } from '../data/characterOptions';
 import { WEAPONS } from '../data/weapons';
 import { SUBCLASSES } from '../data/subclasses';
+
+const SKILLS = [
+  { id: 'acrobatics', name: 'Acrobatics', stat: 'dex' },
+  { id: 'animal_handling', name: 'Animal Handling', stat: 'wis' },
+  { id: 'arcana', name: 'Arcana', stat: 'int' },
+  { id: 'athletics', name: 'Athletics', stat: 'str' },
+  { id: 'deception', name: 'Deception', stat: 'cha' },
+  { id: 'history', name: 'History', stat: 'int' },
+  { id: 'insight', name: 'Insight', stat: 'wis' },
+  { id: 'intimidation', name: 'Intimidation', stat: 'cha' },
+  { id: 'investigation', name: 'Investigation', stat: 'int' },
+  { id: 'medicine', name: 'Medicine', stat: 'wis' },
+  { id: 'nature', name: 'Nature', stat: 'int' },
+  { id: 'perception', name: 'Perception', stat: 'wis' },
+  { id: 'performance', name: 'Performance', stat: 'cha' },
+  { id: 'persuasion', name: 'Persuasion', stat: 'cha' },
+  { id: 'religion', name: 'Religion', stat: 'int' },
+  { id: 'sleight_of_hand', name: 'Sleight of Hand', stat: 'dex' },
+  { id: 'stealth', name: 'Stealth', stat: 'dex' },
+  { id: 'survival', name: 'Survival', stat: 'wis' }
+];
 
 export default function PlayerScreen({ network, gameState }) {
   const [view, setView] = useState('sheet'); 
@@ -16,13 +37,13 @@ export default function PlayerScreen({ network, gameState }) {
       baseStats: { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 },
       armor: { name: 'Leather', base: 11, type: 'light' },
       weaponId: 'shortsword',
+      proficiencies: [], // Tracks which skills they are proficient in
       hpCurrent: 10
     };
   });
 
   const [pointsRemaining, setPointsRemaining] = useState(27); 
 
-  // --- DERIVED STATS ENGINE ---
   const raceData = RACES[character.race];
   const classData = CLASSES[character.class];
   const activeWeapon = WEAPONS[character.weaponId] || WEAPONS.shortsword;
@@ -63,11 +84,36 @@ export default function PlayerScreen({ network, gameState }) {
     
     network.sendAction('PLAYER_ROLL', { 
       characterName: character.name,
-      actionName: activeWeapon.name,
+      actionName: `Attack: ${activeWeapon.name}`,
       result: roll + hitMod, 
       rawRoll: roll,
       modifier: hitMod
     });
+  };
+
+  const rollSkillCheck = (skill) => {
+    if (!network) return;
+    const statMod = calculateMod(finalStats[skill.stat]);
+    const isProficient = character.proficiencies?.includes(skill.id);
+    const hitMod = statMod + (isProficient ? profBonus : 0);
+    const roll = Math.floor(Math.random() * 20) + 1;
+    
+    network.sendAction('PLAYER_ROLL', { 
+      characterName: character.name,
+      actionName: `${skill.name} Check`,
+      result: roll + hitMod, 
+      rawRoll: roll,
+      modifier: hitMod
+    });
+  };
+
+  const toggleProficiency = (skillId) => {
+    const profs = character.proficiencies || [];
+    if (profs.includes(skillId)) {
+      setCharacter({...character, proficiencies: profs.filter(id => id !== skillId)});
+    } else {
+      setCharacter({...character, proficiencies: [...profs, skillId]});
+    }
   };
 
   const handlePointBuy = (stat, change) => {
@@ -84,7 +130,6 @@ export default function PlayerScreen({ network, gameState }) {
     }
   };
 
-  // Filter subclasses based on the currently selected class
   const availableSubclasses = Object.keys(SUBCLASSES).filter(k => SUBCLASSES[k].classId === character.class);
 
   if (view === 'builder') {
@@ -106,10 +151,7 @@ export default function PlayerScreen({ network, gameState }) {
           </div>
           <div>
             <label style={{fontSize: '12px', color: 'var(--text-muted)'}}>CLASS</label>
-            <select style={{width: '100%', padding: '12px', background: 'var(--bg-dark)', color: 'white', border: 'none', borderRadius: '8px'}} value={character.class} onChange={e => {
-              // Reset subclass when class changes
-              setCharacter({...character, class: e.target.value, subclass: ''})
-            }}>
+            <select style={{width: '100%', padding: '12px', background: 'var(--bg-dark)', color: 'white', border: 'none', borderRadius: '8px'}} value={character.class} onChange={e => setCharacter({...character, class: e.target.value, subclass: ''})}>
               {Object.keys(CLASSES).map(k => <option key={k} value={k}>{CLASSES[k].name}</option>)}
             </select>
           </div>
@@ -131,12 +173,11 @@ export default function PlayerScreen({ network, gameState }) {
           </div>
         </div>
 
-        <div style={{background: 'var(--bg-dark)', padding: '16px', borderRadius: '8px'}}>
+        <div style={{background: 'var(--bg-dark)', padding: '16px', borderRadius: '8px', marginBottom: '16px'}}>
           <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: '12px'}}>
             <h4>Point Buy Stats</h4>
             <span style={{color: 'var(--accent)'}}>{pointsRemaining} Points Left</span>
           </div>
-          
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
             {Object.keys(character.baseStats).map(stat => (
               <div key={stat} style={{ textAlign: 'center', background: 'var(--surface)', padding: '8px', borderRadius: '8px' }}>
@@ -147,6 +188,23 @@ export default function PlayerScreen({ network, gameState }) {
                   <button style={{background: 'var(--bg-dark)', padding: '4px 12px', color: 'white'}} onClick={() => handlePointBuy(stat, 1)}>+</button>
                 </div>
               </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{background: 'var(--bg-dark)', padding: '16px', borderRadius: '8px'}}>
+          <h4 style={{marginBottom: '12px'}}>Skill Proficiencies</h4>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+            {SKILLS.map(skill => (
+              <label key={skill.id} style={{display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px'}}>
+                <input 
+                  type="checkbox" 
+                  checked={(character.proficiencies || []).includes(skill.id)} 
+                  onChange={() => toggleProficiency(skill.id)} 
+                  style={{width: '16px', height: '16px', margin: 0}}
+                />
+                {skill.name}
+              </label>
             ))}
           </div>
         </div>
@@ -190,16 +248,17 @@ export default function PlayerScreen({ network, gameState }) {
       </button>
 
       <div className="card">
-        <h4 style={{marginBottom: '10px'}}>Active Stats (Racial Bonus Applied)</h4>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
-          {Object.keys(finalStats).map(stat => {
-            const mod = calculateMod(finalStats[stat]);
+        <h4 style={{marginBottom: '16px'}}>Skills & Saving Throws</h4>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+          {SKILLS.map(skill => {
+            const statMod = calculateMod(finalStats[skill.stat]);
+            const isProficient = character.proficiencies?.includes(skill.id);
+            const totalMod = statMod + (isProficient ? profBonus : 0);
             return (
-              <div key={stat} style={{ background: 'var(--bg-dark)', padding: '10px', borderRadius: '8px', textAlign: 'center' }}>
-                <div style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>{stat}</div>
-                <div style={{ fontSize: '18px', color: 'white', fontWeight: 'bold' }}>{finalStats[stat]}</div>
-                <div style={{ fontSize: '12px', color: 'var(--accent)' }}>{mod >= 0 ? `+${mod}` : mod}</div>
-              </div>
+              <button key={skill.id} className="btn-outline flex-center" onClick={() => rollSkillCheck(skill)} style={{justifyContent: 'space-between', padding: '10px', fontSize: '12px', border: isProficient ? '1px solid var(--accent)' : '1px solid var(--surface)'}}>
+                <span>{skill.name} ({skill.stat.toUpperCase()})</span>
+                <span style={{fontWeight: 'bold', color: isProficient ? 'var(--accent)' : 'white'}}>{totalMod >= 0 ? `+${totalMod}` : totalMod}</span>
+              </button>
             );
           })}
         </div>
