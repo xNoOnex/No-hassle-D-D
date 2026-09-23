@@ -47,13 +47,11 @@ jobs:
         KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
       run: |
-        # Decode the base64 keystore
-        echo $KEYSTORE_BASE64 | base64 --decode > app.keystore
+        # Safely decode the string using quotes and the ignore-garbage flag
+        echo "$KEYSTORE_BASE64" | base64 --decode --ignore-garbage > app.keystore
         
-        # Locate the newest Android build tools installed on the runner
         export BUILD_TOOL=$(ls -d /usr/local/lib/android/sdk/build-tools/* | tail -1)
         
-        # Align and sign the APK
         $BUILD_TOOL/zipalign -v -p 4 android/app/build/outputs/apk/release/app-release-unsigned.apk app-aligned.apk
         $BUILD_TOOL/apksigner sign --ks app.keystore --ks-pass pass:$STORE_PASSWORD --ks-key-alias $KEY_ALIAS --key-pass pass:$KEY_PASSWORD --out No-hassle-D-D-Signed.apk app-aligned.apk
 
