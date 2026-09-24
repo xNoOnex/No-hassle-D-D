@@ -3,7 +3,7 @@ import { Swords, Shield, Heart, User, CheckCircle, Zap, Footprints, Backpack, Bo
 // ... (Keep existing imports and SKILLS array) ...
 
 export default function PlayerScreen({ network, gameState }) {
-  const [view, setView] = useState('combat'); // 'builder' | 'combat' | 'inventory' | 'bio' | 'journal'
+  const [view, setView] = useState(() => { const saved = localStorage.getItem('dnd_character'); return (saved && JSON.parse(saved).name) ? 'combat' : 'builder'; });
   const [isRecording, setIsRecording] = useState(false);
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   const recognition = SpeechRecognition ? new SpeechRecognition() : null;
