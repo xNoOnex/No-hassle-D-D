@@ -69,12 +69,17 @@ export default function DMDashboard({ network, gameState, setGameState }) {
   const rollMonsterAttack = (monster, action) => {
     const statMod = calculateMod(monster[action.stat] || 10);
     const hitRoll = Math.floor(Math.random() * 20) + 1;
-    const totalHit = hitRoll + statMod + 2; 
+    const totalHit = hitRoll + statMod + 2;
     let dmgSum = 0;
     for(let i=0; i < (action.dmgCount || 1); i++) dmgSum += Math.floor(Math.random() * (action.dmgSides || 6)) + 1;
     
     const logMsg = `🦇 ${monster.name} used ${action.name}\n🎲 Hit: ${totalHit} (Base ${hitRoll} + ${statMod + 2})\n💥 Dmg: ${dmgSum + statMod} (Base ${dmgSum} + ${statMod})`;
-    const updatedState = { ...gameState, combatLog: [logMsg, ...(gameState.combatLog || [])].slice(0, 50) };
+    const autoNote = `\n> ${monster.name} attacked with ${action.name} (Hit: ${totalHit})`;
+    
+    const updatedState = { ...gameState, combatLog: [logMsg, ...(gameState.combatLog || [])].slice(0, 50), journal: (gameState.journal || "") + autoNote };
+    setGameState(updatedState);
+    if (network) network.broadcastState(updatedState);
+  };
     setGameState(updatedState);
     if (network) network.broadcastState(updatedState);
   };
@@ -92,26 +97,23 @@ export default function DMDashboard({ network, gameState, setGameState }) {
   // --- INITIATIVE TRACKER LOGIC ---
   const startEncounter = () => {
     let order = [];
-    
-    // Roll for Players
     Object.values(gameState.party || {}).forEach(p => {
       const roll = Math.floor(Math.random() * 20) + 1;
       const mod = p.initiative || 0;
-      order.push({ id: p.id, name: p.name, type: 'player', init: roll + mod, roll, mod });
+      order.push({ id: p.id, name: p.name, type: "player", init: roll + mod, roll, mod });
     });
-    
-    // Roll for Monsters
     activeMonsters.forEach(m => {
       const roll = Math.floor(Math.random() * 20) + 1;
       const mod = calculateMod(m.dex || 10);
-      order.push({ id: m.instanceId, name: m.name, type: 'monster', init: roll + mod, roll, mod });
+      order.push({ id: m.instanceId, name: m.name, type: "monster", init: roll + mod, roll, mod });
     });
-    
-    // Sort highest to lowest
     order.sort((a, b) => b.init - a.init);
 
+    const monsterNames = activeMonsters.map(m => m.name).join(", ");
+    const autoNote = `\n\n--- COMBAT ENGAGED ---\n> Enemies: ${monsterNames}\n`;
     const logMsg = `⚔️ Encounter Started! Initiative rolled for ${order.length} combatants.`;
-    const updatedState = { ...gameState, initiativeOrder: order, activeTurnIndex: 0, combatLog: [logMsg, ...(gameState.combatLog || [])].slice(0, 50) };
+    
+    const updatedState = { ...gameState, initiativeOrder: order, activeTurnIndex: 0, combatLog: [logMsg, ...(gameState.combatLog || [])].slice(0, 50), journal: (gameState.journal || "") + autoNote };
     setGameState(updatedState);
     if (network) network.broadcastState(updatedState);
   };

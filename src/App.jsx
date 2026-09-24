@@ -20,11 +20,9 @@ export default function App() {
   }, [activeSession]);
 
   const handleNetworkData = (data, senderConn) => {
-    // Players only receive state updates; their UI state is ephemeral
     if (activeSession.role === 'player' && data.type === 'SYNC_STATE') {
       setActiveSession(prev => ({ ...prev, gameState: data.payload }));
     } 
-    // DMs process incoming player actions and save the master state
     else if (activeSession.role === 'dm') {
       const state = activeSession.gameState;
       
@@ -37,12 +35,17 @@ export default function App() {
         network.broadcastState(updatedState);
       } 
       else if (data.type === 'PLAYER_ROLL') {
+        // 1. Detailed Math for Combat Log
         let logMsg = `⚔️ ${data.payload.characterName} used ${data.payload.actionName}\n🎲 Hit: ${data.payload.result} (Base ${data.payload.rawRoll} + ${data.payload.modifier})`;
         if (data.payload.damage !== undefined) {
           logMsg += `\n💥 Dmg: ${data.payload.damage} (Base ${data.payload.rawDmg} + ${data.payload.dmgMod})`;
         }
         
-        const updatedState = { ...state, combatLog: [logMsg, ...(state.combatLog || [])].slice(0, 50) };
+        // 2. Clean Narrative for the Auto-Journal
+        const autoNote = `\n> ${data.payload.characterName} rolled ${data.payload.actionName} (${data.payload.result})`;
+        const newJournal = (state.journal || '') + autoNote;
+
+        const updatedState = { ...state, combatLog: [logMsg, ...(state.combatLog || [])].slice(0, 50), journal: newJournal };
         const updatedSession = { ...activeSession, gameState: updatedState };
         setActiveSession(updatedSession);
         saveSession(updatedSession);
@@ -85,8 +88,6 @@ export default function App() {
   const handlePlayerJoin = () => {
     if (joinCode.length !== 4) return alert('Enter a valid 4-letter DM room code.');
     
-    // Players get an ephemeral session just for the active connection. 
-    // Their character is already safely stored in localStorage.
     const ephemeralPlayerSession = {
       id: `player_${Date.now()}`,
       name: `Room ${joinCode}`,
