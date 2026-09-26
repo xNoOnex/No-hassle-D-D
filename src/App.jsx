@@ -15,8 +15,38 @@ export default function App() {
   const [joinCode, setJoinCode] = useState('');
   const [newCampaignName, setNewCampaignName] = useState('');
 
+  // Load Sessions
   useEffect(() => {
     setSessions(getSessions().sort((a, b) => b.lastPlayed - a.lastPlayed));
+  }, [activeSession]);
+
+  // WakeLock Logic: Forces phone screens to stay on during gameplay
+  useEffect(() => {
+    let wakeLock = null;
+    const requestWakeLock = async () => {
+      if (activeSession && 'wakeLock' in navigator) {
+        try {
+          wakeLock = await navigator.wakeLock.request('screen');
+          console.log('Screen Wake Lock active.');
+        } catch (err) {
+          console.error(`Wake Lock failed: ${err.message}`);
+        }
+      }
+    };
+    
+    requestWakeLock();
+    
+    const handleVisibilityChange = () => {
+      if (wakeLock !== null && document.visibilityState === 'visible') {
+        requestWakeLock();
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (wakeLock !== null) wakeLock.release().then(() => wakeLock = null);
+    };
   }, [activeSession]);
 
   const handleNetworkData = (data, senderConn) => {
@@ -35,13 +65,11 @@ export default function App() {
         network.broadcastState(updatedState);
       } 
       else if (data.type === 'PLAYER_ROLL') {
-        // 1. Detailed Math for Combat Log
         let logMsg = `⚔️ ${data.payload.characterName} used ${data.payload.actionName}\n🎲 Hit: ${data.payload.result} (Base ${data.payload.rawRoll} + ${data.payload.modifier})`;
         if (data.payload.damage !== undefined) {
           logMsg += `\n💥 Dmg: ${data.payload.damage} (Base ${data.payload.rawDmg} + ${data.payload.dmgMod})`;
         }
         
-        // 2. Clean Narrative for the Auto-Journal
         const autoNote = `\n> ${data.payload.characterName} rolled ${data.payload.actionName} (${data.payload.result})`;
         const newJournal = (state.journal || '') + autoNote;
 
@@ -89,10 +117,7 @@ export default function App() {
     if (joinCode.length !== 4) return alert('Enter a valid 4-letter DM room code.');
     
     const ephemeralPlayerSession = {
-      id: `player_${Date.now()}`,
-      name: `Room ${joinCode}`,
-      role: 'player',
-      roomCode: joinCode,
+      id: `player_${Date.now()}`, name: `Room ${joinCode}`, role: 'player', roomCode: joinCode,
       gameState: { quest: 'Awaiting DM Sync...', turn: 0, combatLog: [], journal: '' }
     };
     
