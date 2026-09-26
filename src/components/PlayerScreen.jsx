@@ -17,32 +17,53 @@ const SKILLS = [
   { id: 'stealth', name: 'Stealth', stat: 'dex' }, { id: 'survival', name: 'Survival', stat: 'wis' }
 ];
 
+const createBlankChar = () => ({
+  id: `char_${Date.now()}_${Math.floor(Math.random()*1000)}`, name: '', race: 'human', class: 'fighter', subclass: '', level: 1,
+  baseStats: { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 },
+  armor: { name: 'Leather', base: 11, type: 'light' }, weaponId: 'shortsword',
+  proficiencies: [], saveProficiencies: [], hpCurrent: 10,
+  deathSaves: { successes: 0, failures: 0 }, inventoryText: '', bio: { traits: '', ideals: '', bonds: '', flaws: '', backstory: '' }
+});
+
 export default function PlayerScreen({ network, gameState }) {
   const [characters, setCharacters] = useState(() => {
     const savedVault = localStorage.getItem('dnd_characters');
-    if (savedVault) return JSON.parse(savedVault);
+    if (savedVault) {
+      const parsed = JSON.parse(savedVault);
+      if (parsed.length > 0) return parsed;
+    }
     const oldSingle = localStorage.getItem('dnd_character');
     if (oldSingle) {
       const parsed = JSON.parse(oldSingle);
       localStorage.setItem('dnd_characters', JSON.stringify([parsed]));
       return [parsed];
     }
-    return [];
+    // Brand new device: hand them a blank character sheet to prevent crashes
+    const starter = createBlankChar();
+    localStorage.setItem('dnd_characters', JSON.stringify([starter]));
+    return [starter];
   });
 
-  const [activeCharId, setActiveCharId] = useState(null);
-  const [view, setView] = useState(() => {
-    const savedVault = localStorage.getItem('dnd_characters');
-    return (savedVault && JSON.parse(savedVault).length > 0) ? 'select' : 'builder';
+  const [activeCharId, setActiveCharId] = useState(() => {
+    const vault = JSON.parse(localStorage.getItem('dnd_characters') || '[]');
+    if (vault.length > 0 && vault[0].name) return null;
+    if (vault.length > 0) return vault[0].id;
+    return null;
   });
+
+  const [view, setView] = useState(() => {
+    const vault = JSON.parse(localStorage.getItem('dnd_characters') || '[]');
+    // If they have no named characters, force them into the Builder tab
+    return (vault.length > 0 && vault[0].name) ? 'select' : 'builder';
+  });
+
   const [isRecording, setIsRecording] = useState(false);
-  
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   const recognition = SpeechRecognition ? new SpeechRecognition() : null;
 
   const character = characters.find(c => c.id === activeCharId) || null;
+  const availableSubclasses = character ? Object.keys(SUBCLASSES).filter(k => SUBCLASSES[k].classId === character.class) : [];
 
-  // --- DERIVED MATH ENGINE ---
   const raceData = character ? RACES[character.race] : null;
   const classData = character ? CLASSES[character.class] : null;
   const activeWeapon = character ? (WEAPONS[character.weaponId] || WEAPONS.shortsword) : null;
@@ -58,7 +79,6 @@ export default function PlayerScreen({ network, gameState }) {
   const initiative = calculateMod(finalStats.dex || 10);
   const speed = raceData?.speed || 30;
 
-  // --- SEAMLESS AUTO-SYNC ---
   const syncToDM = (targetChar = character) => {
     if (!network || !targetChar) return;
     network.sendAction('SYNC_CHARACTER', {
@@ -81,21 +101,14 @@ export default function PlayerScreen({ network, gameState }) {
   const selectCharacter = (id) => {
     setActiveCharId(id);
     setView('combat');
-    // We defer the sync slightly so the state has time to lock the new activeCharId
     setTimeout(() => {
-      const targetChar = characters.find(c => c.id === id);
+      const targetChar = characters.find(c => c.id === id) || JSON.parse(localStorage.getItem('dnd_characters')).find(c => c.id === id);
       syncToDM(targetChar);
     }, 100);
   };
 
   const createNewCharacter = () => {
-    const newChar = {
-      id: `char_${Date.now()}`, name: '', race: 'human', class: 'fighter', subclass: '', level: 1,
-      baseStats: { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 },
-      armor: { name: 'Leather', base: 11, type: 'light' }, weaponId: 'shortsword',
-      proficiencies: [], saveProficiencies: [], hpCurrent: 10,
-      deathSaves: { successes: 0, failures: 0 }, inventory: [], bio: { traits: '', ideals: '', bonds: '', flaws: '', backstory: '' }
-    };
+    const newChar = createBlankChar();
     setCharacters(prev => {
       const updated = [...prev, newChar];
       localStorage.setItem('dnd_characters', JSON.stringify(updated));
@@ -142,7 +155,6 @@ export default function PlayerScreen({ network, gameState }) {
     network.sendAction('PLAYER_ROLL', payload);
   };
 
-  // --- RENDERERS ---
   if (view === 'select') {
     return (
       <div className="card">
@@ -199,7 +211,14 @@ export default function PlayerScreen({ network, gameState }) {
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '10px', marginBottom: '16px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
+          <div>
+            <label style={{fontSize: '12px', color: 'var(--text-muted)'}}>ARCHETYPE (SUBCLASS)</label>
+            <select style={{width: '100%', padding: '12px', background: 'var(--bg-dark)', color: 'white', border: 'none', borderRadius: '8px'}} value={character.subclass} onChange={e => updateCharacter({subclass: e.target.value})}>
+              <option value="">-- None / Default --</option>
+              {availableSubclasses.map(k => <option key={k} value={k}>{SUBCLASSES[k].name}</option>)}
+            </select>
+          </div>
           <div>
             <label style={{fontSize: '12px', color: 'var(--text-muted)'}}>WEAPON</label>
             <select style={{width: '100%', padding: '12px', background: 'var(--bg-dark)', color: 'white', border: 'none', borderRadius: '8px'}} value={character.weaponId} onChange={e => updateCharacter({weaponId: e.target.value})}>
@@ -289,7 +308,6 @@ export default function PlayerScreen({ network, gameState }) {
 
       <div className="card" style={{ border: character.hpCurrent === 0 ? '1px solid var(--danger)' : '1px solid var(--surface)' }}>
         <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-          {/* Hitting the + or - HP buttons automatically passes 'true' to trigger a silent sync to the DM */}
           <button className="btn-outline" style={{width: '40px', padding: '8px'}} onClick={() => updateCharacter({hpCurrent: Math.max(0, character.hpCurrent - 1)}, true)}>-</button>
           <div style={{textAlign: 'center'}}>
             <Heart size={20} color={character.hpCurrent > 0 ? "var(--success)" : "var(--danger)"} style={{margin: '0 auto'}}/>
