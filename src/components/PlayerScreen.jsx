@@ -27,7 +27,12 @@ const createBlankChar = () => ({
   baseStats: { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 },
   armor: { name: 'Leather', base: 11, type: 'light' }, weaponId: 'shortsword',
   proficiencies: [], saveProficiencies: [], spells: [], spellSlotsUsed: 0, hpCurrent: 10,
-  deathSaves: { successes: 0, failures: 0 }, inventory: [], gold: 0, bio: { traits: '', ideals: '', bonds: '', flaws: '', backstory: '' }
+  deathSaves: { successes: 0, failures: 0 }, 
+  inventory: [
+    { name: "Adventurer's Pack", description: "Includes a backpack, a bedroll, a mess kit, a tinderbox, 10 torches, 10 days of rations, and a waterskin.", stats: "Standard Gear" }
+  ], 
+  gold: 50, 
+  bio: { traits: '', ideals: '', bonds: '', flaws: '', backstory: '' }
 });
 
 export default function PlayerScreen({ network, gameState }) {
@@ -112,7 +117,6 @@ export default function PlayerScreen({ network, gameState }) {
     });
   };
 
-  // --- BACKGROUND INVENTORY RECEIVER ---
   useEffect(() => {
     if (gameState?.lastAction && activeCharId && gameState.lastAction.playerId === activeCharId) {
       const action = gameState.lastAction;
@@ -231,7 +235,6 @@ export default function PlayerScreen({ network, gameState }) {
     network.sendAction('PLAYER_ROLL', payload);
   };
 
-  // --- RENDERERS ---
   if (view === 'select') {
     return (
       <div className="card">

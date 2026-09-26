@@ -1,33 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { Users, Swords, Map, Gem, Skull, Save, Target, Mic, MicOff, BookOpen, BookText, Trash2, Play, SkipForward, Info } from 'lucide-react';
 import { calculateMod } from '../utils/dndEngine';
-
-const DEFAULT_BESTIARY = [
-  { id: 'm_goblin', name: 'Goblin Scout', ac: 13, hp: 7, str: 8, dex: 14, con: 10, int: 10, wis: 8, cha: 8, actions: [{ name: 'Shortbow', stat: 'dex', dmgSides: 6, dmgCount: 1 }] },
-  { id: 'm_snarl', name: 'Snarl (Wolf)', ac: 13, hp: 11, str: 12, dex: 15, con: 11, int: 3, wis: 12, cha: 6, actions: [{ name: 'Bite', stat: 'dex', dmgSides: 4, dmgCount: 1 }] },
-  { id: 'm_kargg', name: 'Kargg (Boss)', ac: 15, hp: 21, str: 14, dex: 14, con: 12, int: 10, wis: 8, cha: 10, actions: [{ name: 'Scimitar', stat: 'str', dmgSides: 6, dmgCount: 1 }] }
-];
-
-const DEFAULT_LOOT = [
-  { id: 'l_1', name: 'Elara’s Fortune Token', type: 'Artifact', rarity: 'Rare', weight: 30, stats: '+1 to Saves', description: 'A smooth wooden tile depicting a golden sun.' },
-  { id: 'l_2', name: 'Jace’s Spark-Blade', type: 'Weapon', rarity: 'Uncommon', weight: 15, stats: '1d6 Slash + 1d4 Lightning', description: 'A modified shortsword with copper wiring.' },
-  { id: 'l_3', name: 'Potion of Healing', type: 'Consumable', rarity: 'Common', weight: 100, stats: '2d4+2 HP', description: 'A classic red vial.' }
-];
+import { BESTIARY } from '../data/bestiary';
+import { LOOT } from '../data/loot';
 
 export default function DMDashboard({ network, gameState, setGameState }) {
-  const [activeTab, setActiveTab] = useState('loot');
+  const [activeTab, setActiveTab] = useState('story');
   const [showRules, setShowRules] = useState(false);
   
-  const [bestiary, setBestiary] = useState(() => {
-    const saved = localStorage.getItem('dnd_bestiary');
-    return saved && JSON.parse(saved).length > 0 ? JSON.parse(saved) : DEFAULT_BESTIARY;
-  });
+  // Merge official databases with locally forged custom items
+  const [customBestiary, setCustomBestiary] = useState(() => JSON.parse(localStorage.getItem('dnd_custom_bestiary') || '[]'));
+  const [customLoot, setCustomLoot] = useState(() => JSON.parse(localStorage.getItem('dnd_custom_loot') || '[]'));
   
-  const [lootPool, setLootPool] = useState(() => {
-    const saved = localStorage.getItem('dnd_loot');
-    return saved && JSON.parse(saved).length > 0 ? JSON.parse(saved) : DEFAULT_LOOT;
-  });
-  
+  const fullBestiary = [...BESTIARY, ...customBestiary];
+  const fullLoot = [...LOOT, ...customLoot];
+
   const [activeMonsters, setActiveMonsters] = useState([]);
   const [generatedLoot, setGeneratedLoot] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
@@ -42,8 +29,8 @@ export default function DMDashboard({ network, gameState, setGameState }) {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   const recognition = SpeechRecognition ? new SpeechRecognition() : null;
 
-  useEffect(() => localStorage.setItem('dnd_bestiary', JSON.stringify(bestiary)), [bestiary]);
-  useEffect(() => localStorage.setItem('dnd_loot', JSON.stringify(lootPool)), [lootPool]);
+  useEffect(() => localStorage.setItem('dnd_custom_bestiary', JSON.stringify(customBestiary)), [customBestiary]);
+  useEffect(() => localStorage.setItem('dnd_custom_loot', JSON.stringify(customLoot)), [customLoot]);
 
   // --- ACTIONS ---
   const spawnMonster = (mob) => setActiveMonsters([...activeMonsters, { ...mob, instanceId: Date.now(), hpCurrent: mob.hp }]);
@@ -56,17 +43,18 @@ export default function DMDashboard({ network, gameState, setGameState }) {
   const handleSaveMonster = () => {
     if (!newMonster.name) return;
     const customMob = {
-      id: `m_${Date.now()}`, name: newMonster.name, ac: newMonster.ac, hp: newMonster.hp,
+      id: `custom_m_${Date.now()}`, name: newMonster.name, ac: newMonster.ac, hp: newMonster.hp,
       str: newMonster.str, dex: newMonster.dex, con: newMonster.con, int: newMonster.int, wis: newMonster.wis, cha: newMonster.cha,
       actions: [{ name: newMonster.actionName, stat: 'str', dmgSides: newMonster.dmgSides, dmgCount: 1 }]
     };
-    setBestiary([...bestiary, customMob]);
+    setCustomBestiary([...customBestiary, customMob]);
     setNewMonster({ name: '', ac: 10, hp: 20, str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10, actionName: 'Strike', dmgSides: 6 });
   };
 
   const handleSaveLoot = () => {
     if (!newLoot.name) return;
-    setLootPool([...lootPool, { ...newLoot, id: `l_${Date.now()}`, weight: Number(newLoot.weight) }]);
+    const customItem = { ...newLoot, id: `custom_l_${Date.now()}`, weight: Number(newLoot.weight) };
+    setCustomLoot([...customLoot, customItem]);
     setNewLoot({ name: '', type: 'Weapon', rarity: 'Common', weight: 50, stats: '', description: '' });
   };
 
@@ -85,10 +73,10 @@ export default function DMDashboard({ network, gameState, setGameState }) {
   };
 
   const generateRandomLoot = () => {
-    if (lootPool.length === 0) return;
-    const totalWeight = lootPool.reduce((sum, item) => sum + item.weight, 0);
+    if (fullLoot.length === 0) return;
+    const totalWeight = fullLoot.reduce((sum, item) => sum + item.weight, 0);
     let random = Math.floor(Math.random() * totalWeight);
-    for (const item of lootPool) {
+    for (const item of fullLoot) {
       if (random < item.weight) return setGeneratedLoot(item);
       random -= item.weight;
     }
@@ -344,12 +332,30 @@ export default function DMDashboard({ network, gameState, setGameState }) {
           <div className="card">
             <h3 style={{marginBottom: '16px'}}>Bestiary / Spawner</h3>
             <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px'}}>
-              {bestiary.map(mob => (
+              {fullBestiary.map(mob => (
                 <button key={mob.id} className="btn-outline" style={{padding: '10px', fontSize: '12px'}} onClick={() => spawnMonster(mob)}>
                   + Spawn {mob.name}
                 </button>
               ))}
             </div>
+          </div>
+          <div className="card">
+            <h3 style={{marginBottom: '16px'}}>Monster Forge</h3>
+            <input type="text" placeholder="MONSTER NAME" value={newMonster.name} onChange={e => setNewMonster({...newMonster, name: e.target.value})} />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
+              <div><label style={{fontSize: '12px', color: 'var(--text-muted)'}}>ARMOR CLASS (AC)</label><input type="number" value={newMonster.ac} onChange={e => setNewMonster({...newMonster, ac: Number(e.target.value)})} /></div>
+              <div><label style={{fontSize: '12px', color: 'var(--text-muted)'}}>HIT POINTS (HP)</label><input type="number" value={newMonster.hp} onChange={e => setNewMonster({...newMonster, hp: Number(e.target.value)})} /></div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
+              <div><label style={{fontSize: '12px', color: 'var(--text-muted)'}}>ACTION NAME</label><input type="text" placeholder="e.g. Claw" value={newMonster.actionName} onChange={e => setNewMonster({...newMonster, actionName: e.target.value})} /></div>
+              <div><label style={{fontSize: '12px', color: 'var(--text-muted)'}}>DAMAGE DICE (e.g. 6 for 1d6)</label><input type="number" value={newMonster.dmgSides} onChange={e => setNewMonster({...newMonster, dmgSides: Number(e.target.value)})} /></div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '5px', marginBottom: '16px' }}>
+              {['str', 'dex', 'con', 'int', 'wis', 'cha'].map(stat => (
+                <div key={stat}><label style={{fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase'}}>{stat}</label><input type="number" value={newMonster[stat]} onChange={e => setNewMonster({...newMonster, [stat]: Number(e.target.value)})} /></div>
+              ))}
+            </div>
+            <button className="btn-primary flex-center" onClick={handleSaveMonster}><Save size={20} /> Save Custom Monster</button>
           </div>
         </div>
       )}
