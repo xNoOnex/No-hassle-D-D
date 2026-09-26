@@ -69,7 +69,7 @@ export default function DMDashboard({ network, gameState, setGameState }) {
   const rollMonsterAttack = (monster, action) => {
     const statMod = calculateMod(monster[action.stat] || 10);
     const hitRoll = Math.floor(Math.random() * 20) + 1;
-    const totalHit = hitRoll + statMod + 2;
+    const totalHit = hitRoll + statMod + 2; 
     let dmgSum = 0;
     for(let i=0; i < (action.dmgCount || 1); i++) dmgSum += Math.floor(Math.random() * (action.dmgSides || 6)) + 1;
     
@@ -77,9 +77,6 @@ export default function DMDashboard({ network, gameState, setGameState }) {
     const autoNote = `\n> ${monster.name} attacked with ${action.name} (Hit: ${totalHit})`;
     
     const updatedState = { ...gameState, combatLog: [logMsg, ...(gameState.combatLog || [])].slice(0, 50), journal: (gameState.journal || "") + autoNote };
-    setGameState(updatedState);
-    if (network) network.broadcastState(updatedState);
-  };
     setGameState(updatedState);
     if (network) network.broadcastState(updatedState);
   };
@@ -94,7 +91,6 @@ export default function DMDashboard({ network, gameState, setGameState }) {
     }
   };
 
-  // --- INITIATIVE TRACKER LOGIC ---
   const startEncounter = () => {
     let order = [];
     Object.values(gameState.party || {}).forEach(p => {
@@ -225,7 +221,11 @@ export default function DMDashboard({ network, gameState, setGameState }) {
           </div>
           <textarea 
             value={gameState.journal || ''} 
-            onChange={(e) => setGameState({...gameState, journal: e.target.value})}
+            onChange={(e) => {
+              const newText = e.target.value;
+              setGameState({...gameState, journal: newText});
+              if (network) network.broadcastState({...gameState, journal: newText});
+            }}
             style={{width: '100%', minHeight: '300px', background: 'var(--bg-dark)', color: 'white', border: '1px solid var(--surface)', padding: '12px', borderRadius: '8px'}}
           />
         </div>
@@ -242,7 +242,7 @@ export default function DMDashboard({ network, gameState, setGameState }) {
                   <span style={{color: 'var(--success)'}}>HP: {player.hpCurrent}/{player.hpMax}</span>
                 </div>
                 <div style={{fontSize: '12px', color: 'var(--text-muted)', marginTop: '8px'}}>
-                  AC: {player.ac} | STR {player.stats.str} | DEX {player.stats.dex} | INT {player.stats.int}
+                  AC: {player.ac} | STR {player.stats?.str} | DEX {player.stats?.dex} | INT {player.stats?.int}
                 </div>
               </div>
             ))
@@ -253,7 +253,6 @@ export default function DMDashboard({ network, gameState, setGameState }) {
       {activeTab === 'combat' && (
         <div style={{display: 'flex', flexDirection: 'column', gap: '16px'}}>
           
-          {/* INITIATIVE TRACKER */}
           <div className="card" style={{border: '1px solid var(--accent)'}}>
             <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px'}}>
               <h3 style={{color: 'var(--accent)'}}>Turn Tracker</h3>
@@ -291,7 +290,6 @@ export default function DMDashboard({ network, gameState, setGameState }) {
             )}
           </div>
 
-          {/* DM RULES CHEAT SHEET */}
           <div className="card">
             <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer'}} onClick={() => setShowRules(!showRules)}>
               <h4 style={{display: 'flex', alignItems: 'center', gap: '8px'}}><Info size={18} color="var(--accent)"/> DM Reference Guide</h4>
@@ -308,7 +306,7 @@ export default function DMDashboard({ network, gameState, setGameState }) {
                   <li><strong>Dodge:</strong> Enemy attacks have Disadvantage until your next turn.</li>
                   <li><strong>Hide:</strong> Roll Stealth to become unseen.</li>
                   <li><strong>Help:</strong> Give an ally Advantage on their next roll.</li>
-                  <li><strong>Ready:</strong> Prepare an action to trigger later (e.g., "If the goblin moves, I shoot").</li>
+                  <li><strong>Ready:</strong> Prepare an action to trigger later.</li>
                 </ul>
                 <strong style={{color: 'white'}}>Free Object Interactions:</strong>
                 <ul style={{marginLeft: '16px'}}>
