@@ -37,12 +37,6 @@ export default function PlayerScreen({ network, gameState }) {
       const parsed = JSON.parse(savedVault);
       if (parsed.length > 0) return parsed;
     }
-    const oldSingle = localStorage.getItem('dnd_character');
-    if (oldSingle) {
-      const parsed = JSON.parse(oldSingle);
-      localStorage.setItem('dnd_characters', JSON.stringify([parsed]));
-      return [parsed];
-    }
     const starter = createBlankChar();
     localStorage.setItem('dnd_characters', JSON.stringify([starter]));
     return [starter];
@@ -67,7 +61,6 @@ export default function PlayerScreen({ network, gameState }) {
   const character = characters.find(c => c.id === activeCharId) || null;
   const availableSubclasses = character ? Object.keys(SUBCLASSES).filter(k => SUBCLASSES[k].classId === character.class) : [];
   
-  // Spell Engine Filters
   const availableSpells = character ? Object.values(SPELLS).filter(s => s.classes.includes(character.class)) : [];
   const preparedSpells = character ? availableSpells.filter(s => (character.spells || []).includes(s.id)) : [];
 
@@ -99,6 +92,16 @@ export default function PlayerScreen({ network, gameState }) {
       ...targetChar, stats: finalStats, ac, hpMax, profBonus, initiative, class: classData?.name || 'Unknown', weapon: activeWeapon
     });
   };
+
+  // --- THE AUTO-HANDSHAKE ---
+  // This ensures that the moment a player connects to the room, their sheet is fired to the DM.
+  useEffect(() => {
+    if (network && character && character.name) {
+      const timer = setTimeout(() => syncToDM(character), 500);
+      return () => clearTimeout(timer);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [network]);
 
   const updateCharacter = (updates, shouldSync = false) => {
     setCharacters(prev => {
@@ -190,7 +193,6 @@ export default function PlayerScreen({ network, gameState }) {
     if (spell.dmgSides) {
       let dmgSum = 0;
       for(let i=0; i < (spell.dmgCount || 1); i++) dmgSum += Math.floor(Math.random() * spell.dmgSides) + 1;
-      
       const flatBonus = spell.staticBonus || (spell.type === 'heal' ? castingMod : 0);
       payload.damage = dmgSum + flatBonus;
       payload.rawDmg = dmgSum;
@@ -306,10 +308,15 @@ export default function PlayerScreen({ network, gameState }) {
               return (
                 <label key={skill.id} style={{display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', opacity: isDisabled ? 0.4 : 1}}>
                   <input 
-                    type="checkbox" disabled={isDisabled} checked={isChecked} 
+                    type="checkbox" 
+                    disabled={isDisabled}
+                    checked={isChecked} 
                     onChange={() => {
-                      if (isChecked) updateCharacter({ proficiencies: currentSkills.filter(id => id !== skill.id) });
-                      else if (currentSkills.length < maxSkills) updateCharacter({ proficiencies: [...currentSkills, skill.id] });
+                      if (isChecked) {
+                        updateCharacter({ proficiencies: currentSkills.filter(id => id !== skill.id) });
+                      } else if (currentSkills.length < maxSkills) {
+                        updateCharacter({ proficiencies: [...currentSkills, skill.id] });
+                      }
                     }} 
                     style={{width: '16px', height: '16px', margin: 0}}
                   />
