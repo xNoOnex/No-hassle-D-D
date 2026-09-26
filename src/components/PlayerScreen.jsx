@@ -38,7 +38,6 @@ export default function PlayerScreen({ network, gameState }) {
       localStorage.setItem('dnd_characters', JSON.stringify([parsed]));
       return [parsed];
     }
-    // Brand new device: hand them a blank character sheet to prevent crashes
     const starter = createBlankChar();
     localStorage.setItem('dnd_characters', JSON.stringify([starter]));
     return [starter];
@@ -53,7 +52,6 @@ export default function PlayerScreen({ network, gameState }) {
 
   const [view, setView] = useState(() => {
     const vault = JSON.parse(localStorage.getItem('dnd_characters') || '[]');
-    // If they have no named characters, force them into the Builder tab
     return (vault.length > 0 && vault[0].name) ? 'select' : 'builder';
   });
 
@@ -78,6 +76,10 @@ export default function PlayerScreen({ network, gameState }) {
   const hpMax = character ? calculateMaxHP(classData.hitDie, finalStats.con, character.level) : 10;
   const initiative = calculateMod(finalStats.dex || 10);
   const speed = raceData?.speed || 30;
+
+  // --- DYNAMIC SKILL LIMITS ---
+  const maxSkills = character?.class === 'rogue' ? 6 : ['bard', 'ranger'].includes(character?.class) ? 5 : 4;
+  const currentSkills = character?.proficiencies || [];
 
   const syncToDM = (targetChar = character) => {
     if (!network || !targetChar) return;
@@ -213,9 +215,9 @@ export default function PlayerScreen({ network, gameState }) {
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
           <div>
-            <label style={{fontSize: '12px', color: 'var(--text-muted)'}}>ARCHETYPE (SUBCLASS)</label>
+            <label style={{fontSize: '12px', color: 'var(--text-muted)'}}>ARCHETYPE</label>
             <select style={{width: '100%', padding: '12px', background: 'var(--bg-dark)', color: 'white', border: 'none', borderRadius: '8px'}} value={character.subclass} onChange={e => updateCharacter({subclass: e.target.value})}>
-              <option value="">-- None / Default --</option>
+              <option value="">-- None --</option>
               {availableSubclasses.map(k => <option key={k} value={k}>{SUBCLASSES[k].name}</option>)}
             </select>
           </div>
@@ -247,22 +249,36 @@ export default function PlayerScreen({ network, gameState }) {
         </div>
 
         <div style={{background: 'var(--bg-dark)', padding: '16px', borderRadius: '8px'}}>
-          <h4 style={{marginBottom: '12px'}}>Skill Proficiencies</h4>
+          <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: '12px'}}>
+            <h4>Skill Proficiencies</h4>
+            <span style={{color: currentSkills.length === maxSkills ? 'var(--success)' : 'var(--accent)'}}>
+              {currentSkills.length} / {maxSkills} Selected
+            </span>
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-            {SKILLS.map(skill => (
-              <label key={skill.id} style={{display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px'}}>
-                <input 
-                  type="checkbox" 
-                  checked={(character.proficiencies || []).includes(skill.id)} 
-                  onChange={() => {
-                    const profs = character.proficiencies || [];
-                    updateCharacter({ proficiencies: profs.includes(skill.id) ? profs.filter(id => id !== skill.id) : [...profs, skill.id] });
-                  }} 
-                  style={{width: '16px', height: '16px', margin: 0}}
-                />
-                {skill.name}
-              </label>
-            ))}
+            {SKILLS.map(skill => {
+              const isChecked = currentSkills.includes(skill.id);
+              const isDisabled = !isChecked && currentSkills.length >= maxSkills;
+              
+              return (
+                <label key={skill.id} style={{display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', opacity: isDisabled ? 0.4 : 1}}>
+                  <input 
+                    type="checkbox" 
+                    disabled={isDisabled}
+                    checked={isChecked} 
+                    onChange={() => {
+                      if (isChecked) {
+                        updateCharacter({ proficiencies: currentSkills.filter(id => id !== skill.id) });
+                      } else if (currentSkills.length < maxSkills) {
+                        updateCharacter({ proficiencies: [...currentSkills, skill.id] });
+                      }
+                    }} 
+                    style={{width: '16px', height: '16px', margin: 0}}
+                  />
+                  {skill.name}
+                </label>
+              );
+            })}
           </div>
         </div>
       </div>
