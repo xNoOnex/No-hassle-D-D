@@ -15,7 +15,7 @@ const DEFAULT_LOOT = [
 ];
 
 export default function DMDashboard({ network, gameState, setGameState }) {
-  const [activeTab, setActiveTab] = useState('story');
+  const [activeTab, setActiveTab] = useState('loot');
   const [showRules, setShowRules] = useState(false);
   
   const [bestiary, setBestiary] = useState(() => {
@@ -34,6 +34,10 @@ export default function DMDashboard({ network, gameState, setGameState }) {
   
   const [newMonster, setNewMonster] = useState({ name: '', ac: 10, hp: 20, str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10, actionName: 'Strike', dmgSides: 6 });
   const [newLoot, setNewLoot] = useState({ name: '', type: 'Weapon', rarity: 'Common', weight: 50, stats: '', description: '' });
+  
+  const [goldAmount, setGoldAmount] = useState('');
+  const [lootTarget, setLootTarget] = useState('');
+  const [goldTarget, setGoldTarget] = useState('');
 
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   const recognition = SpeechRecognition ? new SpeechRecognition() : null;
@@ -75,7 +79,6 @@ export default function DMDashboard({ network, gameState, setGameState }) {
     
     const logMsg = `🦇 ${monster.name} used ${action.name}\n🎲 Hit: ${totalHit} (Base ${hitRoll} + ${statMod + 2})\n💥 Dmg: ${dmgSum + statMod} (Base ${dmgSum} + ${statMod})`;
     const autoNote = `\n> ${monster.name} attacked with ${action.name} (Hit: ${totalHit})`;
-    
     const updatedState = { ...gameState, combatLog: [logMsg, ...(gameState.combatLog || [])].slice(0, 50), journal: (gameState.journal || "") + autoNote };
     setGameState(updatedState);
     if (network) network.broadcastState(updatedState);
@@ -89,6 +92,31 @@ export default function DMDashboard({ network, gameState, setGameState }) {
       if (random < item.weight) return setGeneratedLoot(item);
       random -= item.weight;
     }
+  };
+
+  // --- LOOT DISTRIBUTION ENGINE ---
+  const giveLoot = () => {
+    if (!lootTarget || !generatedLoot) return alert('Select a player to give the item to.');
+    const targetName = gameState.party[lootTarget].name;
+    const action = { type: 'GIVE_LOOT', playerId: lootTarget, item: generatedLoot, timestamp: Date.now() };
+    const logMsg = `🎁 ${targetName} received ${generatedLoot.name}!`;
+    const autoNote = `\n> ${targetName} received ${generatedLoot.name}`;
+    const updatedState = { ...gameState, lastAction: action, combatLog: [logMsg, ...(gameState.combatLog || [])].slice(0, 50), journal: (gameState.journal || '') + autoNote };
+    setGameState(updatedState);
+    if (network) network.broadcastState(updatedState);
+    setGeneratedLoot(null);
+  };
+
+  const giveGold = () => {
+    if (!goldTarget || !goldAmount) return alert('Enter an amount and select a player.');
+    const targetName = gameState.party[goldTarget].name;
+    const action = { type: 'GIVE_GOLD', playerId: goldTarget, amount: Number(goldAmount), timestamp: Date.now() };
+    const logMsg = `💰 ${targetName} received ${goldAmount} Gold!`;
+    const autoNote = `\n> ${targetName} received ${goldAmount} GP`;
+    const updatedState = { ...gameState, lastAction: action, combatLog: [logMsg, ...(gameState.combatLog || [])].slice(0, 50), journal: (gameState.journal || '') + autoNote };
+    setGameState(updatedState);
+    if (network) network.broadcastState(updatedState);
+    setGoldAmount('');
   };
 
   const startEncounter = () => {
@@ -118,7 +146,6 @@ export default function DMDashboard({ network, gameState, setGameState }) {
     const nextIndex = (gameState.activeTurnIndex + 1) % gameState.initiativeOrder.length;
     const activeChar = gameState.initiativeOrder[nextIndex];
     const logMsg = `🔔 Top of the turn: It is now ${activeChar.name}'s turn.`;
-    
     const updatedState = { ...gameState, activeTurnIndex: nextIndex, combatLog: [logMsg, ...(gameState.combatLog || [])].slice(0, 50) };
     setGameState(updatedState);
     if (network) network.broadcastState(updatedState);
@@ -198,16 +225,6 @@ export default function DMDashboard({ network, gameState, setGameState }) {
               </ul>
             </div>
           </div>
-          <div className="card">
-            <h4 style={{marginBottom: '8px'}}>Act 2: The Whispering Woods</h4>
-            <p style={{fontSize: '14px', fontStyle: 'italic', marginBottom: '8px'}}>
-              "Following a trail of dropped gears, you reach a rushing river. The old stone bridge has collapsed into the water."
-            </p>
-            <div style={{background: 'var(--surface)', padding: '10px', borderRadius: '8px', fontSize: '12px', border: '1px solid var(--danger)'}}>
-              <strong>Encounter: Goblin Scouts</strong>
-              <p style={{color: 'var(--text-muted)', marginTop: '4px'}}>Once they cross, two Goblins drop from the trees. Use the Bestiary tab to spawn two 'Goblin Scouts'.</p>
-            </div>
-          </div>
         </div>
       )}
 
@@ -221,11 +238,7 @@ export default function DMDashboard({ network, gameState, setGameState }) {
           </div>
           <textarea 
             value={gameState.journal || ''} 
-            onChange={(e) => {
-              const newText = e.target.value;
-              setGameState({...gameState, journal: newText});
-              if (network) network.broadcastState({...gameState, journal: newText});
-            }}
+            onChange={(e) => setGameState({...gameState, journal: e.target.value})}
             style={{width: '100%', minHeight: '300px', background: 'var(--bg-dark)', color: 'white', border: '1px solid var(--surface)', padding: '12px', borderRadius: '8px'}}
           />
         </div>
@@ -252,7 +265,6 @@ export default function DMDashboard({ network, gameState, setGameState }) {
 
       {activeTab === 'combat' && (
         <div style={{display: 'flex', flexDirection: 'column', gap: '16px'}}>
-          
           <div className="card" style={{border: '1px solid var(--accent)'}}>
             <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px'}}>
               <h3 style={{color: 'var(--accent)'}}>Turn Tracker</h3>
@@ -286,33 +298,7 @@ export default function DMDashboard({ network, gameState, setGameState }) {
                 ))}
               </div>
             ) : (
-              <p style={{fontSize: '12px', color: 'var(--text-muted)'}}>Spawn monsters from the Bestiary, then click Engage to roll initiative for everyone.</p>
-            )}
-          </div>
-
-          <div className="card">
-            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer'}} onClick={() => setShowRules(!showRules)}>
-              <h4 style={{display: 'flex', alignItems: 'center', gap: '8px'}}><Info size={18} color="var(--accent)"/> DM Reference Guide</h4>
-              <span style={{color: 'var(--text-muted)'}}>{showRules ? 'Hide' : 'Show'}</span>
-            </div>
-            {showRules && (
-              <div style={{marginTop: '16px', fontSize: '12px', color: 'var(--text-muted)'}}>
-                <p style={{marginBottom: '8px'}}>On their turn, players can <strong>Move</strong>, take one <strong>Action</strong>, and have one free <strong>Object Interaction</strong>.</p>
-                <strong style={{color: 'white'}}>Standard Actions:</strong>
-                <ul style={{marginLeft: '16px', marginBottom: '8px'}}>
-                  <li><strong>Attack:</strong> Roll an attack with an equipped weapon.</li>
-                  <li><strong>Dash:</strong> Double your movement speed for the turn.</li>
-                  <li><strong>Disengage:</strong> Move away without triggering opportunity attacks.</li>
-                  <li><strong>Dodge:</strong> Enemy attacks have Disadvantage until your next turn.</li>
-                  <li><strong>Hide:</strong> Roll Stealth to become unseen.</li>
-                  <li><strong>Help:</strong> Give an ally Advantage on their next roll.</li>
-                  <li><strong>Ready:</strong> Prepare an action to trigger later.</li>
-                </ul>
-                <strong style={{color: 'white'}}>Free Object Interactions:</strong>
-                <ul style={{marginLeft: '16px'}}>
-                  <li>Draw/sheathe a sword, open a door, pull a torch from a sconce, drink a potion, hand an item to an ally.</li>
-                </ul>
-              </div>
+              <p style={{fontSize: '12px', color: 'var(--text-muted)'}}>Spawn monsters from the Bestiary, then click Engage to roll initiative.</p>
             )}
           </div>
 
@@ -365,29 +351,24 @@ export default function DMDashboard({ network, gameState, setGameState }) {
               ))}
             </div>
           </div>
-          <div className="card">
-            <h3 style={{marginBottom: '16px'}}>Monster Forge</h3>
-            <input type="text" placeholder="MONSTER NAME" value={newMonster.name} onChange={e => setNewMonster({...newMonster, name: e.target.value})} />
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
-              <div><label style={{fontSize: '12px', color: 'var(--text-muted)'}}>ARMOR CLASS (AC)</label><input type="number" value={newMonster.ac} onChange={e => setNewMonster({...newMonster, ac: Number(e.target.value)})} /></div>
-              <div><label style={{fontSize: '12px', color: 'var(--text-muted)'}}>HIT POINTS (HP)</label><input type="number" value={newMonster.hp} onChange={e => setNewMonster({...newMonster, hp: Number(e.target.value)})} /></div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
-              <div><label style={{fontSize: '12px', color: 'var(--text-muted)'}}>ACTION NAME</label><input type="text" placeholder="e.g. Claw" value={newMonster.actionName} onChange={e => setNewMonster({...newMonster, actionName: e.target.value})} /></div>
-              <div><label style={{fontSize: '12px', color: 'var(--text-muted)'}}>DAMAGE DICE (e.g. 6 for 1d6)</label><input type="number" value={newMonster.dmgSides} onChange={e => setNewMonster({...newMonster, dmgSides: Number(e.target.value)})} /></div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '5px', marginBottom: '16px' }}>
-              {['str', 'dex', 'con', 'int', 'wis', 'cha'].map(stat => (
-                <div key={stat}><label style={{fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase'}}>{stat}</label><input type="number" value={newMonster[stat]} onChange={e => setNewMonster({...newMonster, [stat]: Number(e.target.value)})} /></div>
-              ))}
-            </div>
-            <button className="btn-primary flex-center" onClick={handleSaveMonster}><Save size={20} /> Save Custom Monster</button>
-          </div>
         </div>
       )}
 
       {activeTab === 'loot' && (
         <div style={{display: 'flex', flexDirection: 'column', gap: '16px'}}>
+          
+          <div className="card">
+            <h3 style={{marginBottom: '16px'}}>Distribute Gold</h3>
+            <div style={{display: 'flex', gap: '8px'}}>
+              <input type="number" placeholder="Amount" value={goldAmount} onChange={e => setGoldAmount(e.target.value)} style={{flex: 1, marginBottom: 0}} />
+              <select value={goldTarget} onChange={e => setGoldTarget(e.target.value)} style={{flex: 2, padding: '12px', borderRadius: '8px', background: 'var(--bg-dark)', color: 'white', border: 'none'}}>
+                <option value="">-- Player --</option>
+                {Object.values(gameState.party || {}).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              <button className="btn-primary" style={{width: 'auto', padding: '0 16px'}} onClick={giveGold}>Give</button>
+            </div>
+          </div>
+
           <div className="card flex-center" style={{flexDirection: 'column', textAlign: 'center'}}>
             <button className="btn-primary flex-center" style={{padding: '20px', fontSize: '18px'}} onClick={generateRandomLoot}>
               <Gem size={24} /> Roll Random Loot
@@ -396,11 +377,19 @@ export default function DMDashboard({ network, gameState, setGameState }) {
               <div style={{background: 'var(--bg-dark)', padding: '16px', borderRadius: '8px', marginTop: '16px', width: '100%', border: '1px solid var(--accent)'}}>
                 <h3 style={{color: 'var(--accent)'}}>{generatedLoot.name}</h3>
                 <div style={{fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px'}}>{generatedLoot.rarity} {generatedLoot.type}</div>
-                <p style={{fontSize: '14px', marginBottom: '8px'}}>{generatedLoot.description}</p>
-                <div style={{fontSize: '12px', fontWeight: 'bold'}}>Stats: {generatedLoot.stats}</div>
+                <p style={{fontSize: '14px', marginBottom: '16px'}}>{generatedLoot.description}</p>
+                
+                <div style={{display: 'flex', gap: '8px'}}>
+                  <select value={lootTarget} onChange={e => setLootTarget(e.target.value)} style={{flex: 1, padding: '12px', borderRadius: '8px', background: 'var(--surface)', color: 'white', border: 'none'}}>
+                    <option value="">-- Player --</option>
+                    {Object.values(gameState.party || {}).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                  <button className="btn-primary" style={{width: 'auto', padding: '0 16px'}} onClick={giveLoot}>Give</button>
+                </div>
               </div>
             )}
           </div>
+          
           <div className="card">
             <h3 style={{marginBottom: '16px'}}>Loot Forge</h3>
             <input type="text" placeholder="ITEM NAME" value={newLoot.name} onChange={e => setNewLoot({...newLoot, name: e.target.value})} />

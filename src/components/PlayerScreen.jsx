@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Swords, Shield, Heart, User, Zap, Footprints, Backpack, BookOpen, Mic, MicOff, BookText, Play, Plus, ArrowLeft, Tent, Sparkles } from 'lucide-react';
+import { Swords, Shield, Heart, User, Zap, Footprints, Backpack, BookOpen, Mic, MicOff, BookText, Play, Plus, ArrowLeft, Tent, Sparkles, Trash2 } from 'lucide-react';
 import { calculateMod, calculateProficiency, calculateAC, calculateMaxHP } from '../utils/dndEngine';
 import { RACES, CLASSES } from '../data/characterOptions';
 import { WEAPONS } from '../data/weapons';
@@ -26,8 +26,8 @@ const createBlankChar = () => ({
   id: `char_${Date.now()}_${Math.floor(Math.random()*1000)}`, name: '', race: 'human', class: 'fighter', subclass: '', level: 1,
   baseStats: { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 },
   armor: { name: 'Leather', base: 11, type: 'light' }, weaponId: 'shortsword',
-  proficiencies: [], saveProficiencies: [], spells: [], hpCurrent: 10,
-  deathSaves: { successes: 0, failures: 0 }, inventoryText: '', bio: { traits: '', ideals: '', bonds: '', flaws: '', backstory: '' }
+  proficiencies: [], saveProficiencies: [], spells: [], spellSlotsUsed: 0, hpCurrent: 10,
+  deathSaves: { successes: 0, failures: 0 }, inventory: [], gold: 0, bio: { traits: '', ideals: '', bonds: '', flaws: '', backstory: '' }
 });
 
 export default function PlayerScreen({ network, gameState }) {
@@ -61,8 +61,10 @@ export default function PlayerScreen({ network, gameState }) {
   const character = characters.find(c => c.id === activeCharId) || null;
   const availableSubclasses = character ? Object.keys(SUBCLASSES).filter(k => SUBCLASSES[k].classId === character.class) : [];
   
-  const availableSpells = character ? Object.values(SPELLS).filter(s => s.classes.includes(character.class)) : [];
+  const availableSpells = character ? Object.values(SPELLS).filter(s => s.classes.includes(character.class) && s.level <= Math.ceil(character.level / 2)) : [];
   const preparedSpells = character ? availableSpells.filter(s => (character.spells || []).includes(s.id)) : [];
+  const preparedCantrips = preparedSpells.filter(s => s.level === 0);
+  const preparedLeveled = preparedSpells.filter(s => s.level > 0);
 
   const raceData = character ? RACES[character.race] : null;
   const classData = character ? CLASSES[character.class] : null;
@@ -75,13 +77,18 @@ export default function PlayerScreen({ network, gameState }) {
 
   const profBonus = character ? calculateProficiency(character.level) : 2;
   const ac = character ? calculateAC(character.armor.base, character.armor.type, finalStats.dex) : 10;
-  const hpMax = character ? calculateMaxHP(classData.hitDie, finalStats.con, character.level) : 10;
+  const hpMax = character ? calculateMaxHP(classData?.hitDie || 10, finalStats.con, character.level) : 10;
   const initiative = calculateMod(finalStats.dex || 10);
   const speed = raceData?.speed || 30;
 
   const castingStat = SPELL_STAT_MAP[character?.class] || 'int';
-  const spellSaveDC = 8 + profBonus + calculateMod(finalStats[castingStat] || 10);
-  const spellAttackMod = profBonus + calculateMod(finalStats[castingStat] || 10);
+  const castingMod = calculateMod(finalStats[castingStat] || 10);
+  const spellSaveDC = 8 + profBonus + castingMod;
+  const spellAttackMod = profBonus + castingMod;
+
+  const maxCantrips = 3;
+  const maxLeveledPrepared = Math.max(1, (character?.level || 1) + castingMod);
+  const maxSpellSlots = character?.level >= 2 ? 3 : 2;
 
   const maxSkills = character?.class === 'rogue' ? 6 : ['bard', 'ranger'].includes(character?.class) ? 5 : 4;
   const currentSkills = character?.proficiencies || [];
@@ -92,16 +99,6 @@ export default function PlayerScreen({ network, gameState }) {
       ...targetChar, stats: finalStats, ac, hpMax, profBonus, initiative, class: classData?.name || 'Unknown', weapon: activeWeapon
     });
   };
-
-  // --- THE AUTO-HANDSHAKE ---
-  // This ensures that the moment a player connects to the room, their sheet is fired to the DM.
-  useEffect(() => {
-    if (network && character && character.name) {
-      const timer = setTimeout(() => syncToDM(character), 500);
-      return () => clearTimeout(timer);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [network]);
 
   const updateCharacter = (updates, shouldSync = false) => {
     setCharacters(prev => {
@@ -114,6 +111,36 @@ export default function PlayerScreen({ network, gameState }) {
       return newChars;
     });
   };
+
+  // --- BACKGROUND INVENTORY RECEIVER ---
+  useEffect(() => {
+    if (gameState?.lastAction && activeCharId && gameState.lastAction.playerId === activeCharId) {
+      const action = gameState.lastAction;
+      const processed = JSON.parse(localStorage.getItem('processed_actions') || '{}');
+      
+      if (!processed[action.timestamp]) {
+        let updates = {};
+        if (action.type === 'GIVE_LOOT') {
+          updates.inventory = [...(character.inventory || []), action.item];
+        } else if (action.type === 'GIVE_GOLD') {
+          updates.gold = (character.gold || 0) + action.amount;
+        }
+        updateCharacter(updates, true);
+        
+        processed[action.timestamp] = true;
+        localStorage.setItem('processed_actions', JSON.stringify(processed));
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gameState?.lastAction, activeCharId]);
+
+  useEffect(() => {
+    if (network && character && character.name) {
+      const timer = setTimeout(() => syncToDM(character), 500);
+      return () => clearTimeout(timer);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [network]);
 
   const selectCharacter = (id) => {
     setActiveCharId(id);
@@ -174,9 +201,12 @@ export default function PlayerScreen({ network, gameState }) {
 
   const castSpell = (spell) => {
     if (!network || !character) return;
-    const castingMod = calculateMod(finalStats[castingStat]);
-    
-    let hitRoll = 'N/A'; let resultStr = 'Auto-Success'; let hitMod = 0;
+    if (spell.level > 0) {
+      const used = character.spellSlotsUsed || 0;
+      if (used >= maxSpellSlots) return alert("Out of spell slots! Take a Rest to recover.");
+      updateCharacter({ spellSlotsUsed: used + 1 }, true);
+    }
+    let hitRoll = 'N/A'; let resultStr = 'Auto-Hit'; let hitMod = 0;
     
     if (spell.type === 'attack') {
       hitRoll = Math.floor(Math.random() * 20) + 1;
@@ -336,7 +366,7 @@ export default function PlayerScreen({ network, gameState }) {
       <div style={{ display: 'flex', gap: '10px' }}>
         <button className="btn-outline flex-center" onClick={() => setView('select')}><ArrowLeft size={18}/> Vault</button>
         <button className="btn-outline flex-center" onClick={() => setView('builder')}><User size={18}/> Edit</button>
-        <button className="btn-primary flex-center" style={{background: 'var(--success)', borderColor: 'var(--success)'}} onClick={() => updateCharacter({hpCurrent: hpMax}, true)}><Tent size={18}/> Rest</button>
+        <button className="btn-primary flex-center" style={{background: 'var(--success)', borderColor: 'var(--success)'}} onClick={() => updateCharacter({hpCurrent: hpMax, spellSlotsUsed: 0}, true)}><Tent size={18}/> Rest</button>
       </div>
 
       <div className="card" style={{ borderLeft: '4px solid var(--accent)', padding: '16px' }}>
@@ -403,15 +433,17 @@ export default function PlayerScreen({ network, gameState }) {
           
           {preparedSpells.length > 0 && (
             <div className="card">
-              <h4 style={{marginBottom: '10px', display: 'flex', justifyContent: 'space-between'}}>
-                Prepared Spells
-                <span style={{fontSize: '12px', color: 'var(--text-muted)', fontWeight: 'normal'}}>Save DC {spellSaveDC} | Atk +{spellAttackMod}</span>
-              </h4>
+              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px'}}>
+                <h4 style={{margin: 0}}>Spells</h4>
+                <span style={{fontSize: '12px', color: 'var(--accent)'}}>
+                  Slots: {maxSpellSlots - (character.spellSlotsUsed || 0)} / {maxSpellSlots} Left
+                </span>
+              </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '8px' }}>
                 {preparedSpells.map(spell => (
                   <button key={spell.id} className="btn-outline flex-center" onClick={() => castSpell(spell)} style={{justifyContent: 'space-between', padding: '12px', borderColor: 'var(--accent)'}}>
                     <span style={{fontWeight: 'bold'}}><Sparkles size={14} style={{display: 'inline', marginRight: '4px', verticalAlign: 'text-bottom'}}/> {spell.name}</span>
-                    <span style={{fontSize: '12px', color: 'var(--text-muted)'}}>{spell.type.toUpperCase()}</span>
+                    <span style={{fontSize: '12px', color: 'var(--text-muted)'}}>{spell.level === 0 ? 'CANTRIP' : 'SLOT LVL 1'}</span>
                   </button>
                 ))}
               </div>
@@ -433,21 +465,6 @@ export default function PlayerScreen({ network, gameState }) {
               })}
             </div>
           </div>
-          <div className="card">
-            <h4 style={{marginBottom: '10px'}}>Skills</h4>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-              {SKILLS.map(skill => {
-                const isProf = character.proficiencies?.includes(skill.id);
-                const mod = calculateMod(finalStats[skill.stat]) + (isProf ? profBonus : 0);
-                return (
-                  <button key={skill.id} className="btn-outline flex-center" onClick={() => rollAction(`${skill.name}`, skill.stat, isProf)} style={{justifyContent: 'space-between', padding: '10px', fontSize: '12px', border: isProf ? '1px solid var(--accent)' : '1px solid var(--surface)'}}>
-                    <span>{skill.name}</span>
-                    <span style={{fontWeight: 'bold', color: isProf ? 'var(--accent)' : 'white'}}>{mod >= 0 ? `+${mod}` : mod}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
         </>
       )}
 
@@ -456,8 +473,8 @@ export default function PlayerScreen({ network, gameState }) {
           <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px'}}>
             <h3>Spellbook</h3>
             <div style={{fontSize: '12px', color: 'var(--text-muted)', textAlign: 'right'}}>
-              Stat: {castingStat.toUpperCase()}<br/>
-              Save DC: {spellSaveDC} | Atk: +{spellAttackMod}
+              Cantrips: {preparedCantrips.length}/{maxCantrips}<br/>
+              Spells: {preparedLeveled.length}/{maxLeveledPrepared}
             </div>
           </div>
           
@@ -467,22 +484,30 @@ export default function PlayerScreen({ network, gameState }) {
             <div style={{display: 'flex', flexDirection: 'column', gap: '10px'}}>
               {availableSpells.map(spell => {
                 const isPrepared = (character.spells || []).includes(spell.id);
+                const isCantrip = spell.level === 0;
+                const atCap = isCantrip ? preparedCantrips.length >= maxCantrips : preparedLeveled.length >= maxLeveledPrepared;
+                const canToggle = isPrepared || !atCap;
+
                 return (
-                  <div key={spell.id} style={{background: 'var(--bg-dark)', padding: '12px', borderRadius: '8px', border: isPrepared ? '1px solid var(--accent)' : '1px solid transparent'}}>
+                  <div key={spell.id} style={{background: 'var(--bg-dark)', padding: '12px', borderRadius: '8px', border: isPrepared ? '1px solid var(--accent)' : '1px solid transparent', opacity: canToggle ? 1 : 0.4}}>
                     <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px'}}>
                       <div>
                         <strong style={{fontSize: '16px', color: isPrepared ? 'var(--accent)' : 'white'}}>{spell.name}</strong>
-                        <div style={{fontSize: '10px', color: 'var(--text-muted)'}}>Level {spell.level} | {spell.type.toUpperCase()}</div>
+                        <div style={{fontSize: '10px', color: 'var(--text-muted)'}}>{isCantrip ? 'Cantrip' : `Level ${spell.level}`} | {spell.type.toUpperCase()}</div>
                       </div>
-                      <button className={isPrepared ? 'btn-primary' : 'btn-outline'} style={{padding: '6px 12px', fontSize: '12px', width: 'auto'}} onClick={() => {
-                        const current = character.spells || [];
-                        updateCharacter({ spells: isPrepared ? current.filter(id => id !== spell.id) : [...current, spell.id] }, true);
-                      }}>
+                      <button 
+                        disabled={!canToggle}
+                        className={isPrepared ? 'btn-primary' : 'btn-outline'} 
+                        style={{padding: '6px 12px', fontSize: '12px', width: 'auto'}} 
+                        onClick={() => {
+                          const current = character.spells || [];
+                          updateCharacter({ spells: isPrepared ? current.filter(id => id !== spell.id) : [...current, spell.id] }, true);
+                        }}
+                      >
                         {isPrepared ? 'Prepared' : 'Learn'}
                       </button>
                     </div>
                     <p style={{fontSize: '12px', color: 'var(--text-main)'}}>{spell.description}</p>
-                    {spell.dmgSides && <div style={{fontSize: '10px', color: 'var(--danger)', marginTop: '6px', fontWeight: 'bold'}}>{spell.dmgCount}d{spell.dmgSides} {spell.type === 'heal' ? 'Healing' : 'Damage'}</div>}
                   </div>
                 );
               })}
@@ -493,16 +518,42 @@ export default function PlayerScreen({ network, gameState }) {
 
       {view === 'inventory' && (
         <div className="card">
-          <h3>Backpack & Equipment</h3>
-          <textarea value={character.inventoryText || ''} onChange={e => updateCharacter({inventoryText: e.target.value})} style={{width: '100%', minHeight: '200px', background: 'var(--bg-dark)', color: 'white', border: 'none', padding: '12px', borderRadius: '8px', marginTop: '10px'}} placeholder="- 50 Gold Pieces&#10;- Bedroll" />
+          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px'}}>
+            <h3>Backpack & Equipment</h3>
+            <span style={{color: 'gold', fontWeight: 'bold', fontSize: '18px'}}>💰 {character?.gold || 0} GP</span>
+          </div>
+          <p style={{color: 'var(--text-muted)', fontSize: '12px', marginBottom: '16px'}}>Gold and loot are directly distributed by the DM.</p>
+          
+          <div style={{display: 'flex', flexDirection: 'column', gap: '8px'}}>
+            {(!character?.inventory || character.inventory.length === 0) ? (
+              <div style={{color: 'var(--text-muted)', textAlign: 'center', padding: '20px'}}>Inventory is empty.</div>
+            ) : (
+              character.inventory.map((item, i) => (
+                <div key={i} style={{background: 'var(--bg-dark)', padding: '12px', borderRadius: '8px', borderLeft: '2px solid var(--accent)', display: 'flex', justifyContent: 'space-between'}}>
+                  <div>
+                    <strong style={{display: 'block', fontSize: '14px'}}>{item.name}</strong>
+                    {item.stats && <span style={{fontSize: '10px', color: 'var(--success)'}}>{item.stats}</span>}
+                    {item.description && <p style={{fontSize: '12px', color: 'var(--text-muted)', margin: '4px 0 0 0'}}>{item.description}</p>}
+                  </div>
+                  <button style={{background: 'transparent', color: 'var(--danger)', padding: '8px'}} onClick={() => {
+                    const newInv = [...character.inventory];
+                    newInv.splice(i, 1);
+                    updateCharacter({ inventory: newInv }, true);
+                  }}>
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
         </div>
       )}
 
       {view === 'bio' && (
         <div className="card" style={{display: 'flex', flexDirection: 'column', gap: '12px'}}>
           <h3>Character Details</h3>
-          <textarea placeholder="Personality Traits" value={character.bio.traits} onChange={e => updateCharacter({bio: {...character.bio, traits: e.target.value}})} style={{width: '100%', background: 'var(--bg-dark)', color: 'white', border: 'none', padding: '12px', borderRadius: '8px'}} />
-          <textarea placeholder="Backstory & Notes" value={character.bio.backstory} onChange={e => updateCharacter({bio: {...character.bio, backstory: e.target.value}})} style={{width: '100%', minHeight: '150px', background: 'var(--bg-dark)', color: 'white', border: 'none', padding: '12px', borderRadius: '8px'}} />
+          <textarea placeholder="Personality Traits" value={character.bio?.traits || ''} onChange={e => updateCharacter({bio: {...character.bio, traits: e.target.value}})} style={{width: '100%', background: 'var(--bg-dark)', color: 'white', border: 'none', padding: '12px', borderRadius: '8px'}} />
+          <textarea placeholder="Backstory & Notes" value={character.bio?.backstory || ''} onChange={e => updateCharacter({bio: {...character.bio, backstory: e.target.value}})} style={{width: '100%', minHeight: '150px', background: 'var(--bg-dark)', color: 'white', border: 'none', padding: '12px', borderRadius: '8px'}} />
         </div>
       )}
 
