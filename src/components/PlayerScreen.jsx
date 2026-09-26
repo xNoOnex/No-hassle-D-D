@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Swords, Shield, Heart, User, Zap, Footprints, Backpack, BookOpen, Mic, MicOff, BookText, Play, Plus, ArrowLeft, Tent } from 'lucide-react';
+import { Swords, Shield, Heart, User, Zap, Footprints, Backpack, BookOpen, Mic, MicOff, BookText, Play, Plus, ArrowLeft, Tent, Sparkles } from 'lucide-react';
 import { calculateMod, calculateProficiency, calculateAC, calculateMaxHP } from '../utils/dndEngine';
 import { RACES, CLASSES } from '../data/characterOptions';
 import { WEAPONS } from '../data/weapons';
 import { SUBCLASSES } from '../data/subclasses';
+import { SPELLS } from '../data/spells';
 
 const SKILLS = [
   { id: 'acrobatics', name: 'Acrobatics', stat: 'dex' }, { id: 'animal_handling', name: 'Animal Handling', stat: 'wis' },
@@ -17,11 +18,15 @@ const SKILLS = [
   { id: 'stealth', name: 'Stealth', stat: 'dex' }, { id: 'survival', name: 'Survival', stat: 'wis' }
 ];
 
+const SPELL_STAT_MAP = {
+  wizard: 'int', cleric: 'wis', bard: 'cha', sorcerer: 'cha', warlock: 'cha', paladin: 'cha', ranger: 'wis', druid: 'wis', rogue: 'int', fighter: 'int'
+};
+
 const createBlankChar = () => ({
   id: `char_${Date.now()}_${Math.floor(Math.random()*1000)}`, name: '', race: 'human', class: 'fighter', subclass: '', level: 1,
   baseStats: { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 },
   armor: { name: 'Leather', base: 11, type: 'light' }, weaponId: 'shortsword',
-  proficiencies: [], saveProficiencies: [], hpCurrent: 10,
+  proficiencies: [], saveProficiencies: [], spells: [], hpCurrent: 10,
   deathSaves: { successes: 0, failures: 0 }, inventoryText: '', bio: { traits: '', ideals: '', bonds: '', flaws: '', backstory: '' }
 });
 
@@ -61,6 +66,10 @@ export default function PlayerScreen({ network, gameState }) {
 
   const character = characters.find(c => c.id === activeCharId) || null;
   const availableSubclasses = character ? Object.keys(SUBCLASSES).filter(k => SUBCLASSES[k].classId === character.class) : [];
+  
+  // Spell Engine Filters
+  const availableSpells = character ? Object.values(SPELLS).filter(s => s.classes.includes(character.class)) : [];
+  const preparedSpells = character ? availableSpells.filter(s => (character.spells || []).includes(s.id)) : [];
 
   const raceData = character ? RACES[character.race] : null;
   const classData = character ? CLASSES[character.class] : null;
@@ -77,7 +86,10 @@ export default function PlayerScreen({ network, gameState }) {
   const initiative = calculateMod(finalStats.dex || 10);
   const speed = raceData?.speed || 30;
 
-  // --- DYNAMIC SKILL LIMITS ---
+  const castingStat = SPELL_STAT_MAP[character?.class] || 'int';
+  const spellSaveDC = 8 + profBonus + calculateMod(finalStats[castingStat] || 10);
+  const spellAttackMod = profBonus + calculateMod(finalStats[castingStat] || 10);
+
   const maxSkills = character?.class === 'rogue' ? 6 : ['bard', 'ranger'].includes(character?.class) ? 5 : 4;
   const currentSkills = character?.proficiencies || [];
 
@@ -157,6 +169,37 @@ export default function PlayerScreen({ network, gameState }) {
     network.sendAction('PLAYER_ROLL', payload);
   };
 
+  const castSpell = (spell) => {
+    if (!network || !character) return;
+    const castingMod = calculateMod(finalStats[castingStat]);
+    
+    let hitRoll = 'N/A'; let resultStr = 'Auto-Success'; let hitMod = 0;
+    
+    if (spell.type === 'attack') {
+      hitRoll = Math.floor(Math.random() * 20) + 1;
+      hitMod = spellAttackMod;
+      resultStr = hitRoll + hitMod;
+    } else if (spell.type === 'save') {
+      resultStr = `Target DC ${spellSaveDC} ${spell.saveStat.toUpperCase()} Save`;
+    } else if (spell.type === 'heal') {
+      resultStr = `Heal`;
+    }
+
+    let payload = { characterName: character.name, actionName: `Cast ${spell.name}`, result: resultStr, rawRoll: hitRoll, modifier: hitMod };
+    
+    if (spell.dmgSides) {
+      let dmgSum = 0;
+      for(let i=0; i < (spell.dmgCount || 1); i++) dmgSum += Math.floor(Math.random() * spell.dmgSides) + 1;
+      
+      const flatBonus = spell.staticBonus || (spell.type === 'heal' ? castingMod : 0);
+      payload.damage = dmgSum + flatBonus;
+      payload.rawDmg = dmgSum;
+      payload.dmgMod = flatBonus;
+    }
+    network.sendAction('PLAYER_ROLL', payload);
+  };
+
+  // --- RENDERERS ---
   if (view === 'select') {
     return (
       <div className="card">
@@ -207,7 +250,7 @@ export default function PlayerScreen({ network, gameState }) {
           </div>
           <div>
             <label style={{fontSize: '12px', color: 'var(--text-muted)'}}>CLASS</label>
-            <select style={{width: '100%', padding: '12px', background: 'var(--bg-dark)', color: 'white', border: 'none', borderRadius: '8px'}} value={character.class} onChange={e => updateCharacter({class: e.target.value, subclass: ''})}>
+            <select style={{width: '100%', padding: '12px', background: 'var(--bg-dark)', color: 'white', border: 'none', borderRadius: '8px'}} value={character.class} onChange={e => updateCharacter({class: e.target.value, subclass: '', spells: []})}>
               {Object.keys(CLASSES).map(k => <option key={k} value={k}>{CLASSES[k].name}</option>)}
             </select>
           </div>
@@ -263,15 +306,10 @@ export default function PlayerScreen({ network, gameState }) {
               return (
                 <label key={skill.id} style={{display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', opacity: isDisabled ? 0.4 : 1}}>
                   <input 
-                    type="checkbox" 
-                    disabled={isDisabled}
-                    checked={isChecked} 
+                    type="checkbox" disabled={isDisabled} checked={isChecked} 
                     onChange={() => {
-                      if (isChecked) {
-                        updateCharacter({ proficiencies: currentSkills.filter(id => id !== skill.id) });
-                      } else if (currentSkills.length < maxSkills) {
-                        updateCharacter({ proficiencies: [...currentSkills, skill.id] });
-                      }
+                      if (isChecked) updateCharacter({ proficiencies: currentSkills.filter(id => id !== skill.id) });
+                      else if (currentSkills.length < maxSkills) updateCharacter({ proficiencies: [...currentSkills, skill.id] });
                     }} 
                     style={{width: '16px', height: '16px', margin: 0}}
                   />
@@ -355,6 +393,24 @@ export default function PlayerScreen({ network, gameState }) {
           <button className="btn-primary flex-center" onClick={() => rollAction(`Attack: ${activeWeapon.name}`, activeWeapon.stat, true, activeWeapon)} style={{padding: '20px', fontSize: '18px'}}>
             <Swords size={24} /> Attack: {activeWeapon.name}
           </button>
+          
+          {preparedSpells.length > 0 && (
+            <div className="card">
+              <h4 style={{marginBottom: '10px', display: 'flex', justifyContent: 'space-between'}}>
+                Prepared Spells
+                <span style={{fontSize: '12px', color: 'var(--text-muted)', fontWeight: 'normal'}}>Save DC {spellSaveDC} | Atk +{spellAttackMod}</span>
+              </h4>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '8px' }}>
+                {preparedSpells.map(spell => (
+                  <button key={spell.id} className="btn-outline flex-center" onClick={() => castSpell(spell)} style={{justifyContent: 'space-between', padding: '12px', borderColor: 'var(--accent)'}}>
+                    <span style={{fontWeight: 'bold'}}><Sparkles size={14} style={{display: 'inline', marginRight: '4px', verticalAlign: 'text-bottom'}}/> {spell.name}</span>
+                    <span style={{fontSize: '12px', color: 'var(--text-muted)'}}>{spell.type.toUpperCase()}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="card">
             <h4 style={{marginBottom: '10px'}}>Saving Throws</h4>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
@@ -386,6 +442,46 @@ export default function PlayerScreen({ network, gameState }) {
             </div>
           </div>
         </>
+      )}
+
+      {view === 'spells' && (
+        <div className="card">
+          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px'}}>
+            <h3>Spellbook</h3>
+            <div style={{fontSize: '12px', color: 'var(--text-muted)', textAlign: 'right'}}>
+              Stat: {castingStat.toUpperCase()}<br/>
+              Save DC: {spellSaveDC} | Atk: +{spellAttackMod}
+            </div>
+          </div>
+          
+          {availableSpells.length === 0 ? (
+            <p style={{color: 'var(--text-muted)', fontSize: '14px'}}>Your class cannot cast spells.</p>
+          ) : (
+            <div style={{display: 'flex', flexDirection: 'column', gap: '10px'}}>
+              {availableSpells.map(spell => {
+                const isPrepared = (character.spells || []).includes(spell.id);
+                return (
+                  <div key={spell.id} style={{background: 'var(--bg-dark)', padding: '12px', borderRadius: '8px', border: isPrepared ? '1px solid var(--accent)' : '1px solid transparent'}}>
+                    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px'}}>
+                      <div>
+                        <strong style={{fontSize: '16px', color: isPrepared ? 'var(--accent)' : 'white'}}>{spell.name}</strong>
+                        <div style={{fontSize: '10px', color: 'var(--text-muted)'}}>Level {spell.level} | {spell.type.toUpperCase()}</div>
+                      </div>
+                      <button className={isPrepared ? 'btn-primary' : 'btn-outline'} style={{padding: '6px 12px', fontSize: '12px', width: 'auto'}} onClick={() => {
+                        const current = character.spells || [];
+                        updateCharacter({ spells: isPrepared ? current.filter(id => id !== spell.id) : [...current, spell.id] }, true);
+                      }}>
+                        {isPrepared ? 'Prepared' : 'Learn'}
+                      </button>
+                    </div>
+                    <p style={{fontSize: '12px', color: 'var(--text-main)'}}>{spell.description}</p>
+                    {spell.dmgSides && <div style={{fontSize: '10px', color: 'var(--danger)', marginTop: '6px', fontWeight: 'bold'}}>{spell.dmgCount}d{spell.dmgSides} {spell.type === 'heal' ? 'Healing' : 'Damage'}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       )}
 
       {view === 'inventory' && (
@@ -430,6 +526,7 @@ export default function PlayerScreen({ network, gameState }) {
 
       <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, background: 'var(--surface)', padding: '12px', display: 'flex', justifyContent: 'space-around', borderTop: '1px solid #334155', maxWidth: '600px', margin: '0 auto' }}>
         <button style={{background: 'transparent', color: view === 'combat' ? 'var(--accent)' : 'var(--text-muted)'}} onClick={() => setView('combat')}><Swords size={20} /><div style={{fontSize: '10px'}}>Combat</div></button>
+        <button style={{background: 'transparent', color: view === 'spells' ? 'var(--accent)' : 'var(--text-muted)'}} onClick={() => setView('spells')}><Sparkles size={20} /><div style={{fontSize: '10px'}}>Spells</div></button>
         <button style={{background: 'transparent', color: view === 'inventory' ? 'var(--accent)' : 'var(--text-muted)'}} onClick={() => setView('inventory')}><Backpack size={20} /><div style={{fontSize: '10px'}}>Bag</div></button>
         <button style={{background: 'transparent', color: view === 'bio' ? 'var(--accent)' : 'var(--text-muted)'}} onClick={() => setView('bio')}><BookOpen size={20} /><div style={{fontSize: '10px'}}>Bio</div></button>
         <button style={{background: 'transparent', color: view === 'journal' ? 'var(--accent)' : 'var(--text-muted)'}} onClick={() => setView('journal')}><BookText size={20} /><div style={{fontSize: '10px'}}>Notes</div></button>
