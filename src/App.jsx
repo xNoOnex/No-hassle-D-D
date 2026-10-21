@@ -266,9 +266,7 @@ export default function App() {
   };
 
   const startHostSession = (existingSession = null) => {
-    const campaignTitle = existingSession ? existingSession.name : newCampaignName.trim();
-    if (!campaignTitle) return;
-
+    const campaignTitle = existingSession ? existingSession.name : (newCampaignName.trim() || 'New Campaign');
     const roomId = existingSession?.roomId || existingSession?.roomCode || generateRoomCode();
     const net = new GameNetwork(true, roomId, handleNetworkData);
     networkRef.current = net;
@@ -287,10 +285,10 @@ export default function App() {
 
     net.init(() => {
       setStatus('Hosting Active');
-      setNetwork(net);
-      setActiveSession(sessionObj);
-      saveSession(sessionObj);
     });
+
+    setActiveSession(sessionObj);
+    saveSession(sessionObj);
   };
 
   const startClientJoin = () => {
@@ -311,9 +309,9 @@ export default function App() {
 
     net.init(() => {
       setStatus('Connected to Host');
-      setNetwork(net);
-      setActiveSession(sessionObj);
     });
+
+    setActiveSession(sessionObj);
   };
 
   const handleSaveSettings = () => {
@@ -333,84 +331,84 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
-      <header className="px-4 py-3 bg-slate-900 border-b border-slate-800 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Shield className="w-6 h-6 text-indigo-400" />
-          <h1 className="font-bold text-lg tracking-wide">No-Hassle D&D</h1>
+    <div style={{ minHeight: '100vh', background: '#090d16', color: '#f8fafc', display: 'flex', flexDirection: 'column', fontFamily: 'sans-serif' }}>
+      <header style={{ padding: '12px 16px', background: '#0f172a', borderBottom: '1px solid #1e293b', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Shield style={{ width: '22px', height: '22px', color: '#818cf8' }} />
+          <h1 style={{ fontSize: '18px', fontWeight: 'bold', margin: 0 }}>No-Hassle D&D</h1>
           {activeSession && (
-            <span className="text-xs px-2 py-0.5 rounded bg-indigo-950 text-indigo-300 border border-indigo-800 font-mono">
+            <span style={{ fontSize: '11px', padding: '2px 6px', borderRadius: '4px', background: '#1e1b4b', color: '#c7d2fe', border: '1px solid #3730a3', fontFamily: 'monospace' }}>
               ROOM: {activeSession.roomId} ({activeSession.role === 'host' ? 'HOST' : 'PLAYER'})
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <button
             onClick={() => setShowSettings(true)}
-            className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700"
+            style={{ padding: '8px', background: '#1e293b', border: '1px solid #334155', color: '#cbd5e1', borderRadius: '6px', cursor: 'pointer' }}
             title="AI Director Settings"
           >
-            <Settings className="w-4 h-4" />
+            <Settings style={{ width: '18px', height: '18px' }} />
           </button>
           {activeSession && (
             <button
               onClick={handleLeaveSession}
-              className="px-3 py-1.5 bg-red-950 hover:bg-red-900 text-red-300 text-xs font-semibold rounded border border-red-800 flex items-center gap-1"
+              style={{ padding: '6px 12px', background: '#450a0a', border: '1px solid #7f1d1d', color: '#fca5a5', fontSize: '12px', fontWeight: '600', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
             >
-              <ArrowLeft className="w-3.5 h-3.5" /> Leave
+              <ArrowLeft style={{ width: '14px', height: '14px' }} /> Leave
             </button>
           )}
         </div>
       </header>
 
-      <main className="flex-1 flex flex-col max-w-4xl w-full mx-auto p-4 overflow-y-auto">
+      <main style={{ flex: 1, display: 'flex', flexDirection: 'column', maxWidth: '800px', width: '100%', margin: '0 auto', padding: '16px', boxSizing: 'border-box', overflowY: 'auto' }}>
         {!activeSession ? (
-          <div className="space-y-6">
-            <div className="p-5 bg-slate-900 rounded-xl border border-indigo-900/50 shadow-lg space-y-4">
-              <div className="flex items-center gap-2 text-indigo-400">
-                <Shield className="w-5 h-5" />
-                <h2 className="font-bold text-base">Host a Campaign (AI Director + Host Player)</h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            <div style={{ padding: '20px', background: '#0f172a', borderRadius: '12px', border: '1px solid rgba(99, 102, 241, 0.3)', boxShadow: '0 4px 6px rgba(0,0,0,0.3)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#818cf8' }}>
+                <Shield style={{ width: '20px', height: '20px' }} />
+                <h2 style={{ fontSize: '15px', fontWeight: 'bold', margin: 0 }}>Host a Campaign (AI Director + Host Player)</h2>
               </div>
-              <p className="text-sm text-slate-400">
+              <p style={{ fontSize: '13px', color: '#94a3b8', margin: 0 }}>
                 Generates a room code, runs the OpenRouter AI Director on your phone, and lets you play alongside your party.
               </p>
-              <div className="flex gap-2">
+              <div style={{ display: 'flex', gap: '8px' }}>
                 <input
                   type="text"
                   placeholder="NEW CAMPAIGN NAME"
                   value={newCampaignName}
                   onChange={e => setNewCampaignName(e.target.value)}
-                  className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                  style={{ flex: 1, background: '#020617', border: '1px solid #334155', borderRadius: '8px', padding: '10px 14px', fontSize: '14px', color: '#fff', outline: 'none' }}
                 />
                 <button
                   onClick={() => startHostSession(null)}
-                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg text-sm transition"
+                  style={{ padding: '10px 20px', background: '#4f46e5', border: 'none', color: '#fff', fontWeight: '600', borderRadius: '8px', fontSize: '14px', cursor: 'pointer' }}
                 >
                   Host World
                 </button>
               </div>
             </div>
 
-            <div className="p-5 bg-slate-900 rounded-xl border border-emerald-900/50 shadow-lg space-y-4">
-              <div className="flex items-center gap-2 text-emerald-400">
-                <Users className="w-5 h-5" />
-                <h2 className="font-bold text-base">Join a Game (Client Player)</h2>
+            <div style={{ padding: '20px', background: '#0f172a', borderRadius: '12px', border: '1px solid rgba(16, 185, 129, 0.3)', boxShadow: '0 4px 6px rgba(0,0,0,0.3)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#34d399' }}>
+                <Users style={{ width: '20px', height: '20px' }} />
+                <h2 style={{ fontSize: '15px', fontWeight: 'bold', margin: 0 }}>Join a Game (Client Player)</h2>
               </div>
-              <p className="text-sm text-slate-400">
+              <p style={{ fontSize: '13px', color: '#94a3b8', margin: 0 }}>
                 Enter the Host's 4-letter room code. Your character syncs automatically and uses the Host's AI Director.
               </p>
-              <div className="flex gap-2">
+              <div style={{ display: 'flex', gap: '8px' }}>
                 <input
                   type="text"
                   placeholder="4-LETTER CODE"
                   maxLength={6}
                   value={joinCode}
                   onChange={e => setJoinCode(e.target.value)}
-                  className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-sm text-white uppercase font-mono focus:outline-none focus:border-emerald-500"
+                  style={{ flex: 1, background: '#020617', border: '1px solid #334155', borderRadius: '8px', padding: '10px 14px', fontSize: '14px', color: '#fff', textTransform: 'uppercase', fontFamily: 'monospace', outline: 'none' }}
                 />
                 <button
                   onClick={startClientJoin}
-                  className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg text-sm transition"
+                  style={{ padding: '10px 24px', background: '#059669', border: 'none', color: '#fff', fontWeight: '600', borderRadius: '8px', fontSize: '14px', cursor: 'pointer' }}
                 >
                   Join Room
                 </button>
@@ -418,25 +416,25 @@ export default function App() {
             </div>
 
             {sessions.length > 0 && (
-              <div className="p-5 bg-slate-900 rounded-xl border border-slate-800 shadow-lg space-y-3">
-                <h2 className="font-bold text-sm text-slate-300">Resume Saved Campaign (Host)</h2>
-                <div className="space-y-2">
+              <div style={{ padding: '20px', background: '#0f172a', borderRadius: '12px', border: '1px solid #1e293b', boxShadow: '0 4px 6px rgba(0,0,0,0.3)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <h2 style={{ fontSize: '14px', fontWeight: 'bold', color: '#cbd5e1', margin: 0 }}>Resume Saved Campaign (Host)</h2>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {sessions.map(s => (
                     <div
                       key={s.id}
-                      className="p-3 bg-slate-950 rounded-lg border border-slate-800 flex items-center justify-between"
+                      style={{ padding: '12px', background: '#020617', borderRadius: '8px', border: '1px solid #1e293b', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
                     >
                       <div>
-                        <div className="font-semibold text-sm text-indigo-300">{s.name}</div>
-                        <div className="text-xs text-slate-500">
+                        <div style={{ fontWeight: '600', fontSize: '14px', color: '#818cf8' }}>{s.name}</div>
+                        <div style={{ fontSize: '11px', color: '#64748b' }}>
                           Last played: {new Date(s.lastPlayed).toLocaleDateString()}
                         </div>
                       </div>
                       <button
                         onClick={() => startHostSession(s)}
-                        className="px-3 py-1.5 bg-indigo-950 hover:bg-indigo-900 text-indigo-300 border border-indigo-800 rounded-lg text-xs font-semibold flex items-center gap-1.5"
+                        style={{ padding: '6px 12px', background: '#1e1b4b', border: '1px solid #3730a3', color: '#c7d2fe', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
                       >
-                        <Play className="w-3.5 h-3.5" /> Host Saved
+                        <Play style={{ width: '12px', height: '12px' }} /> Host Saved
                       </button>
                     </div>
                   ))}
@@ -456,58 +454,58 @@ export default function App() {
       </main>
 
       {showSettings && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
-          <div className="bg-slate-900 border border-slate-700 rounded-xl max-w-md w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-indigo-400 font-bold">
-                <Key className="w-5 h-5" />
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', zIndex: 100 }}>
+          <div style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '12px', maxWidth: '400px', width: '100%', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px', boxSizing: 'border-box', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#818cf8', fontWeight: 'bold', fontSize: '15px' }}>
+                <Key style={{ width: '18px', height: '18px' }} />
                 <span>OpenRouter AI Settings</span>
               </div>
-              <button onClick={() => setShowSettings(false)} className="text-slate-400 hover:text-white">
-                <X className="w-5 h-5" />
+              <button onClick={() => setShowSettings(false)} style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}>
+                <X style={{ width: '20px', height: '20px' }} />
               </button>
             </div>
 
-            <p className="text-xs text-slate-400">
+            <p style={{ fontSize: '12px', color: '#94a3b8', margin: 0, lineHeight: '1.4' }}>
               Your API key is stored strictly in your phone's local storage. It is never included in git commits or sent to other players.
             </p>
 
-            <div className="space-y-3">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <div>
-                <label className="text-xs font-semibold text-slate-300 block mb-1">OpenRouter API Key</label>
+                <label style={{ fontSize: '11px', fontWeight: '600', color: '#cbd5e1', display: 'block', marginBottom: '4px' }}>OpenRouter API Key</label>
                 <input
                   type="password"
                   placeholder="sk-or-v1-..."
                   value={apiKeyInput}
                   onChange={e => setApiKeyInput(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500 font-mono"
+                  style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '8px 12px', fontSize: '13px', color: '#fff', fontFamily: 'monospace', outline: 'none', boxSizing: 'border-box' }}
                 />
               </div>
 
               <div>
-                <label className="text-xs font-semibold text-slate-300 block mb-1">Model ID</label>
+                <label style={{ fontSize: '11px', fontWeight: '600', color: '#cbd5e1', display: 'block', marginBottom: '4px' }}>Model ID</label>
                 <input
                   type="text"
                   placeholder="nousresearch/hermes-3-llama-3.1-70b"
                   value={modelInput}
                   onChange={e => setModelInput(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500 font-mono"
+                  style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '8px 12px', fontSize: '13px', color: '#fff', fontFamily: 'monospace', outline: 'none', boxSizing: 'border-box' }}
                 />
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 pt-2">
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '4px' }}>
               <button
                 onClick={() => setShowSettings(false)}
-                className="px-4 py-2 bg-slate-800 text-slate-300 text-sm font-semibold rounded hover:bg-slate-700"
+                style={{ padding: '8px 16px', background: '#1e293b', color: '#cbd5e1', fontSize: '13px', fontWeight: '600', borderRadius: '6px', border: 'none', cursor: 'pointer' }}
               >
                 Cancel
               </button>
               <button
                 onClick={handleSaveSettings}
-                className="px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded hover:bg-indigo-500 flex items-center gap-1"
+                style={{ padding: '8px 16px', background: '#4f46e5', color: '#fff', fontSize: '13px', fontWeight: '600', borderRadius: '6px', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
               >
-                <Check className="w-4 h-4" /> Save
+                <Check style={{ width: '14px', height: '14px' }} /> Save
               </button>
             </div>
           </div>
