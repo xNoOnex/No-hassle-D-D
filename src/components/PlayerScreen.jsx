@@ -1,14 +1,14 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  Swords, Shield, User, Backpack, BookOpen, 
-  Target, RefreshCw, Dices, Plus, Minus, Play, SkipForward, Users
+import React, { useState } from 'react';
+import {
+  Swords, Shield, User, Backpack, BookOpen,
+  Target, RefreshCw, Dices, Play, SkipForward, Users, Lock
 } from 'lucide-react';
-import { 
-  calculateMod, calculateProficiency, calculateAC, calculateMaxHP,
+import {
+  calculateMod, calculateProficiency,
   executeCheck, resolveAttack,
-  buildInitiativeQueue, advanceTurn, executeAutomatedMonsterTurn 
+  buildInitiativeQueue, advanceTurn, executeAutomatedMonsterTurn
 } from '../utils/dndEngine';
-import { getAllMonsters, getAllSpells, getMonster } from '../data/index';
+import { getAllMonsters, getMonster } from '../data/index';
 
 const SKILLS = [
   { id: 'acrobatics', name: 'Acrobatics', stat: 'dex' },
@@ -31,101 +31,45 @@ const SKILLS = [
   { id: 'survival', name: 'Survival', stat: 'wis' }
 ];
 
-const createBlankChar = () => ({
-  id: `char_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-  name: 'Wanderer',
-  race: 'Human',
-  class: 'Fighter',
-  level: 1,
-  baseStats: { str: 14, dex: 12, con: 14, int: 10, wis: 12, cha: 10 },
-  armor: { name: 'Leather Armor', base: 11, type: 'light' },
-  weapon: { name: 'Longsword', damageDice: '1d8', stat: 'str' },
-  proficiencies: ['athletics', 'perception'],
-  hpCurrent: 12,
-  hpMax: 12,
-  ac: 12,
-  inventory: ['Adventurer Pack', 'Torch', 'Rations'],
-  gold: 25
-});
-
-export default function PlayerScreen({ network, gameState, isHost, dispatchAction, isProcessingAi }) {
+export default function PlayerScreen({ network, gameState, activeCharacter, isHost, dispatchAction, isProcessingAi }) {
   const [activeTab, setActiveTab] = useState('story');
-  const [activeChar, setActiveChar] = useState(() => {
-    const saved = localStorage.getItem('dnd_active_character');
-    return saved ? JSON.parse(saved) : createBlankChar();
-  });
-
   const [selectedTargetId, setSelectedTargetId] = useState('');
   const [customActionText, setCustomActionText] = useState('');
   const [spawnMonsterName, setSpawnMonsterName] = useState('Goblin');
   const [playerNoteInput, setPlayerNoteInput] = useState('');
 
   const allMonsters = getAllMonsters();
-  const allSpells = getAllSpells();
 
-  useEffect(() => {
-    const remoteSelf = (gameState.party || []).find(p => p.id === activeChar.id);
-    if (remoteSelf && remoteSelf.hpCurrent !== undefined && remoteSelf.hpCurrent !== activeChar.hpCurrent) {
-      setActiveChar(prev => {
-        const updated = { ...prev, hpCurrent: remoteSelf.hpCurrent };
-        localStorage.setItem('dnd_active_character', JSON.stringify(updated));
-        return updated;
-      });
-    }
-  }, [gameState.party]);
+  // Pull live synced HP from party state if updated during combat
+  const partySelf = (gameState.party || []).find(p => p.id === activeCharacter?.id);
+  const hero = partySelf ? { ...activeCharacter, ...partySelf } : (activeCharacter || {
+    id: 'fallback',
+    name: 'Hero',
+    race: 'Human',
+    class: 'Fighter 1',
+    level: 1,
+    baseStats: { str: 14, dex: 12, con: 14, int: 10, wis: 12, cha: 10 },
+    weapon: { name: 'Longsword', damageDice: '1d8', stat: 'str' },
+    armor: { name: 'Leather Armor', base: 11, type: 'light' },
+    proficiencies: [],
+    hpCurrent: 12,
+    hpMax: 12,
+    ac: 12,
+    inventory: [],
+    gold: 25
+  });
 
-  const syncCharWithRoom = (charObj) => {
-    const computedAc = calculateAC(charObj.armor, calculateMod(charObj.baseStats.dex));
-    const readyChar = { ...charObj, ac: computedAc };
-    localStorage.setItem('dnd_active_character', JSON.stringify(readyChar));
-
-    if (isHost) {
-      dispatchAction({
-        actionType: 'SYNC_CHARACTER',
-        character: readyChar,
-        skipAi: true
-      });
-    } else if (network) {
-      network.sendAction('SYNC_CHARACTER', readyChar);
-    }
-  };
-
-  useEffect(() => {
-    syncCharWithRoom(activeChar);
-  }, [activeChar.name, activeChar.level, activeChar.class]);
-
-  const adjustCharacterHp = (delta) => {
-    const nextHp = Math.max(0, Math.min(activeChar.hpMax, activeChar.hpCurrent + delta));
-    const updated = { ...activeChar, hpCurrent: nextHp };
-    setActiveChar(updated);
-    syncCharWithRoom(updated);
-  };
-
-  const handleStatChange = (stat, val) => {
-    const num = Math.max(1, Math.min(30, parseInt(val, 10) || 10));
-    const nextStats = { ...activeChar.baseStats, [stat]: num };
-    const conMod = calculateMod(stat === 'con' ? num : activeChar.baseStats.con);
-    const maxHp = calculateMaxHP(conMod, 10, activeChar.level);
-    const updated = {
-      ...activeChar,
-      baseStats: nextStats,
-      hpMax: maxHp,
-      hpCurrent: Math.min(activeChar.hpCurrent, maxHp)
-    };
-    setActiveChar(updated);
-    syncCharWithRoom(updated);
-  };
+  const profBonus = calculateProficiency(hero.level || 1);
 
   const handleSkillRoll = (skill) => {
-    const isProf = activeChar.proficiencies.includes(skill.id);
-    const profBonus = calculateProficiency(activeChar.level);
-    const statVal = activeChar.baseStats[skill.stat];
+    const isProf = (hero.proficiencies || []).includes(skill.id);
+    const statVal = hero.baseStats?.[skill.stat] ?? 10;
     const check = executeCheck(statVal, isProf, profBonus, 'normal');
 
     dispatchAction({
       actionType: 'SKILL_CHECK',
-      actorName: activeChar.name,
-      summary: `${activeChar.name} rolled ${skill.name}: ${check.total} (d20: ${check.keptRoll} + Mod: ${check.totalMod})${check.isCrit ? ' [NATURAL 20!]' : check.isFumble ? ' [NATURAL 1!]' : ''}.`
+      actorName: hero.name,
+      summary: `${hero.name} rolled ${skill.name}: ${check.total} (d20: ${check.keptRoll} + Mod: ${check.totalMod})${check.isCrit ? ' [NATURAL 20!]' : check.isFumble ? ' [NATURAL 1!]' : ''}.`
     });
     setActiveTab('story');
   };
@@ -135,16 +79,15 @@ export default function PlayerScreen({ network, gameState, isHost, dispatchActio
     const target = monsters.find(m => (m.instanceId || m.id) === selectedTargetId) || monsters[0];
     if (!target) return;
 
-    const statKey = activeChar.weapon?.stat || 'str';
-    const statMod = calculateMod(activeChar.baseStats[statKey]);
-    const profBonus = calculateProficiency(activeChar.level);
+    const statKey = hero.weapon?.stat || 'str';
+    const statMod = calculateMod(hero.baseStats?.[statKey] ?? 10);
 
     const attackRes = resolveAttack({
-      attackerName: activeChar.name,
+      attackerName: hero.name,
       defenderName: target.name,
       attackBonus: statMod + profBonus,
       targetAC: target.ac || 10,
-      damageDice: activeChar.weapon?.damageDice || '1d8',
+      damageDice: hero.weapon?.damageDice || '1d8',
       damageBonus: statMod
     });
 
@@ -159,7 +102,7 @@ export default function PlayerScreen({ network, gameState, isHost, dispatchActio
 
     dispatchAction({
       actionType: 'ATTACK',
-      actorName: activeChar.name,
+      actorName: hero.name,
       updatedMonsters,
       summary: `${attackRes.summary}${killed ? ` ${target.name} is slain!` : ''}`
     });
@@ -177,15 +120,15 @@ export default function PlayerScreen({ network, gameState, isHost, dispatchActio
 
     dispatchAction({
       actionType: 'SPAWN_MONSTER',
-      actorName: activeChar.name,
+      actorName: hero.name,
       updatedMonsters: nextMonsters,
-      summary: `${newMob.name} (HP: ${newMob.hp}, AC: ${newMob.ac}) enters the area!`,
+      summary: `${newMob.name} (HP: ${newMob.hp}, AC: ${newMob.ac}) enters the encounter!`,
       skipAi: true
     });
   };
 
   const handleStartCombat = () => {
-    const partyList = gameState.party?.length ? gameState.party : [activeChar];
+    const partyList = gameState.party?.length ? gameState.party : [hero];
     const combat = buildInitiativeQueue(partyList, gameState.activeMonsters || []);
 
     dispatchAction({
@@ -215,7 +158,7 @@ export default function PlayerScreen({ network, gameState, isHost, dispatchActio
         m => (m.instanceId || m.id) === activeUnit.id || m.name === activeUnit.name
       ) || activeUnit;
 
-      const mobTurn = executeAutomatedMonsterTurn(liveMob, gameState.party || [activeChar]);
+      const mobTurn = executeAutomatedMonsterTurn(liveMob, gameState.party || [hero]);
 
       dispatchAction({
         actionType: 'MONSTER_TURN',
@@ -243,8 +186,8 @@ export default function PlayerScreen({ network, gameState, isHost, dispatchActio
 
     dispatchAction({
       actionType: 'FREEFORM_ACTION',
-      actorName: activeChar.name,
-      summary: `${activeChar.name}: "${customActionText.trim()}"`
+      actorName: hero.name,
+      summary: `${hero.name}: "${customActionText.trim()}"`
     });
     setCustomActionText('');
   };
@@ -254,8 +197,8 @@ export default function PlayerScreen({ network, gameState, isHost, dispatchActio
     if (!playerNoteInput.trim()) return;
     dispatchAction({
       actionType: 'ADD_NOTE',
-      actorName: activeChar.name,
-      newJournalEntry: `[${activeChar.name}] ${playerNoteInput.trim()}`,
+      actorName: hero.name,
+      newJournalEntry: `[${hero.name}] ${playerNoteInput.trim()}`,
       skipAi: true
     });
     setPlayerNoteInput('');
@@ -264,8 +207,9 @@ export default function PlayerScreen({ network, gameState, isHost, dispatchActio
   const activeTurnUnit = gameState.turnQueue?.[gameState.currentTurnIndex || 0];
 
   return (
-    <div className="flex-1 flex flex-col gap-3 min-h-0">
-      <div className="grid grid-cols-5 gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800">
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '12px', minHeight: 0 }}>
+      {/* Navigation Tabs */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '6px', background: '#0f172a', padding: '6px', borderRadius: '12px', border: '1px solid #1e293b' }}>
         {[
           { id: 'story', label: 'Story', icon: BookOpen },
           { id: 'combat', label: 'Combat', icon: Swords },
@@ -279,66 +223,80 @@ export default function PlayerScreen({ network, gameState, isHost, dispatchActio
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center justify-center gap-1 py-2 text-xs font-semibold rounded-lg transition ${
-                isActive 
-                  ? 'bg-indigo-600 text-white shadow-md' 
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-              }`}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '5px',
+                padding: '9px 4px',
+                fontSize: '12px',
+                fontWeight: 'bold',
+                borderRadius: '8px',
+                border: 'none',
+                cursor: 'pointer',
+                background: isActive ? '#4f46e5' : 'transparent',
+                color: isActive ? '#ffffff' : '#94a3b8'
+              }}
             >
-              <Icon className="w-3.5 h-3.5" />
+              <Icon style={{ width: '14px', height: '14px' }} />
               <span>{tab.label}</span>
             </button>
           );
         })}
       </div>
 
+      {/* TAB 1: STORY FEED */}
       {activeTab === 'story' && (
-        <div className="flex-1 flex flex-col gap-3 min-h-0">
-          <div className="flex-1 bg-slate-900 border border-slate-800 rounded-xl p-4 overflow-y-auto space-y-4">
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '12px', minHeight: 0 }}>
+          <div style={{ flex: 1, background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', padding: '16px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '14px' }}>
             {(gameState.storyLog || []).map(log => (
-              <div key={log.id} className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <span className={`text-xs font-bold px-2 py-0.5 rounded ${
-                    log.actor === 'Director'
-                      ? 'bg-purple-950 text-purple-300 border border-purple-800'
-                      : 'bg-indigo-950 text-indigo-300 border border-indigo-800'
-                  }`}>
+              <div key={log.id} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{
+                    fontSize: '11px',
+                    fontWeight: 'bold',
+                    padding: '2px 8px',
+                    borderRadius: '4px',
+                    background: log.actor === 'Director' ? '#3b0764' : '#1e1b4b',
+                    color: log.actor === 'Director' ? '#e9d5ff' : '#c7d2fe',
+                    border: log.actor === 'Director' ? '1px solid #6b21a8' : '1px solid #3730a3'
+                  }}>
                     {log.actor}
                   </span>
-                  <span className="text-[10px] text-slate-500 font-mono">
+                  <span style={{ fontSize: '10px', color: '#64748b', fontFamily: 'monospace' }}>
                     {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </span>
                 </div>
                 {log.mechanicalSummary && (
-                  <div className="text-xs text-amber-300/90 font-mono bg-slate-950 px-2.5 py-1 rounded border border-slate-800">
+                  <div style={{ fontSize: '12px', color: '#fcd34d', fontFamily: 'monospace', background: '#020617', padding: '6px 10px', borderRadius: '6px', border: '1px solid #1e293b' }}>
                     {log.mechanicalSummary}
                   </div>
                 )}
-                <p className="text-sm text-slate-200 leading-relaxed pl-1 whitespace-pre-wrap">
+                <p style={{ fontSize: '14px', color: '#e2e8f0', lineHeight: '1.5', margin: 0, whiteSpace: 'pre-wrap' }}>
                   {log.text}
                 </p>
               </div>
             ))}
             {isProcessingAi && (
-              <div className="flex items-center gap-2 text-indigo-400 text-xs italic animate-pulse">
-                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#818cf8', fontSize: '12px', fontStyle: 'italic' }}>
+                <RefreshCw style={{ width: '14px', height: '14px' }} />
                 <span>AI Director is generating response...</span>
               </div>
             )}
           </div>
 
-          <form onSubmit={handleCustomAction} className="flex gap-2">
+          <form onSubmit={handleCustomAction} style={{ display: 'flex', gap: '8px' }}>
             <input
               type="text"
-              placeholder={`What does ${activeChar.name} say or do?`}
+              placeholder={`What does ${hero.name} say or do?`}
               value={customActionText}
               onChange={e => setCustomActionText(e.target.value)}
-              className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+              style={{ flex: 1, background: '#0f172a', border: '1px solid #334155', borderRadius: '10px', padding: '12px 14px', fontSize: '14px', color: '#fff' }}
             />
             <button
               type="submit"
               disabled={isProcessingAi || !customActionText.trim()}
-              className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 text-white font-semibold text-sm rounded-xl transition"
+              style={{ padding: '12px 20px', background: isProcessingAi || !customActionText.trim() ? '#1e293b' : '#4f46e5', color: '#fff', fontWeight: 'bold', fontSize: '14px', borderRadius: '10px', border: 'none', cursor: 'pointer' }}
             >
               Send
             </button>
@@ -346,52 +304,58 @@ export default function PlayerScreen({ network, gameState, isHost, dispatchActio
         </div>
       )}
 
+      {/* TAB 2: COMBAT & TURN TRACKER */}
       {activeTab === 'combat' && (
-        <div className="flex-1 overflow-y-auto space-y-4">
-          <div className="p-4 bg-slate-900 border border-slate-800 rounded-xl space-y-3">
-            <div className="flex items-center justify-between">
+        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div style={{ padding: '16px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
               <div>
-                <h3 className="text-sm font-bold text-rose-400 flex items-center gap-1.5">
-                  <Swords className="w-4 h-4" />
+                <h3 style={{ fontSize: '14px', fontWeight: 'bold', color: '#fb7185', margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Swords style={{ width: '16px', height: '16px' }} />
                   <span>Turn Priority & Initiative</span>
                 </h3>
-                <p className="text-xs text-slate-400">
+                <p style={{ fontSize: '12px', color: '#94a3b8', margin: '4px 0 0 0' }}>
                   {gameState.combatActive && activeTurnUnit
                     ? `Round ${gameState.round || 1} — Active Turn: ${activeTurnUnit.name}`
                     : 'Roll initiative to lock turn order.'}
                 </p>
               </div>
-              <div className="flex gap-2">
+              <div style={{ display: 'flex', gap: '8px' }}>
                 <button
                   onClick={handleStartCombat}
-                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg flex items-center gap-1"
+                  style={{ padding: '8px 12px', background: '#4f46e5', color: '#fff', fontSize: '12px', fontWeight: 'bold', borderRadius: '8px', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px' }}
                 >
-                  <Play className="w-3.5 h-3.5" /> Roll Initiative
+                  <Play style={{ width: '12px', height: '12px' }} /> Roll Initiative
                 </button>
                 {gameState.combatActive && (
                   <button
                     onClick={handleNextTurn}
                     disabled={isProcessingAi}
-                    className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold rounded-lg flex items-center gap-1"
+                    style={{ padding: '8px 12px', background: '#d97706', color: '#fff', fontSize: '12px', fontWeight: 'bold', borderRadius: '8px', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px' }}
                   >
-                    <SkipForward className="w-3.5 h-3.5" /> Next Turn
+                    <SkipForward style={{ width: '12px', height: '12px' }} /> Next Turn
                   </button>
                 )}
               </div>
             </div>
 
             {gameState.turnQueue?.length > 0 && (
-              <div className="flex gap-1.5 overflow-x-auto pb-1">
+              <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', paddingBottom: '4px' }}>
                 {gameState.turnQueue.map((unit, idx) => {
                   const isCurrent = idx === (gameState.currentTurnIndex || 0);
                   return (
                     <div
                       key={`${unit.id}_${idx}`}
-                      className={`px-2.5 py-1 rounded text-xs font-semibold whitespace-nowrap border ${
-                        isCurrent
-                          ? 'bg-amber-950 text-amber-300 border-amber-500'
-                          : 'bg-slate-950 text-slate-400 border-slate-800'
-                      }`}
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        fontWeight: 'bold',
+                        whiteSpace: 'nowrap',
+                        background: isCurrent ? '#451a03' : '#020617',
+                        color: isCurrent ? '#fcd34d' : '#94a3b8',
+                        border: isCurrent ? '1px solid #f59e0b' : '1px solid #1e293b'
+                      }}
                     >
                       {unit.initiative}: {unit.name}
                     </div>
@@ -400,11 +364,11 @@ export default function PlayerScreen({ network, gameState, isHost, dispatchActio
               </div>
             )}
 
-            <div className="flex gap-2 items-center pt-2 border-t border-slate-800">
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', paddingTop: '8px', borderTop: '1px solid #1e293b' }}>
               <select
                 value={selectedTargetId}
                 onChange={e => setSelectedTargetId(e.target.value)}
-                className="flex-1 bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm text-white focus:outline-none"
+                style={{ flex: 1, background: '#020617', border: '1px solid #334155', borderRadius: '8px', padding: '10px', fontSize: '13px', color: '#fff' }}
               >
                 <option value="">Target Monster...</option>
                 {(gameState.activeMonsters || []).map(m => (
@@ -416,35 +380,31 @@ export default function PlayerScreen({ network, gameState, isHost, dispatchActio
               <button
                 onClick={handleAttackAction}
                 disabled={isProcessingAi || !gameState.activeMonsters?.length}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 disabled:text-slate-600 text-white font-semibold text-sm rounded-lg flex items-center gap-1.5"
+                style={{ padding: '10px 16px', background: !gameState.activeMonsters?.length ? '#1e293b' : '#e11d48', color: '#fff', fontWeight: 'bold', fontSize: '13px', borderRadius: '8px', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
               >
-                <Target className="w-4 h-4" /> Attack
+                <Target style={{ width: '15px', height: '15px' }} /> Attack ({hero.weapon?.name || 'Strike'})
               </button>
             </div>
           </div>
 
-          <div className="space-y-2">
-            <h3 className="text-xs font-bold uppercase text-slate-400">Active Monsters ({gameState.activeMonsters?.length || 0})</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <h3 style={{ fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', color: '#94a3b8', margin: 0 }}>
+              Active Monsters ({gameState.activeMonsters?.length || 0})
+            </h3>
             {(!gameState.activeMonsters || gameState.activeMonsters.length === 0) ? (
-              <div className="p-4 bg-slate-900 border border-slate-800 rounded-xl text-center text-xs text-slate-500">
+              <div style={{ padding: '16px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', textAlign: 'center', fontSize: '12px', color: '#64748b' }}>
                 No active monsters. The AI Director will spawn enemies during the story, or you can spawn one below.
               </div>
             ) : (
               gameState.activeMonsters.map(mob => (
-                <div key={mob.instanceId || mob.id} className="p-3 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-between">
+                <div key={mob.instanceId || mob.id} style={{ padding: '12px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <div>
-                    <div className="font-bold text-sm text-rose-300">{mob.name}</div>
-                    <div className="text-xs text-slate-400">AC: {mob.ac} | CR: {mob.cr}</div>
+                    <div style={{ fontWeight: 'bold', fontSize: '14px', color: '#fda4af' }}>{mob.name}</div>
+                    <div style={{ fontSize: '12px', color: '#94a3b8' }}>AC: {mob.ac} | CR: {mob.cr}</div>
                   </div>
-                  <div className="text-right">
-                    <div className="text-xs font-bold text-slate-200">
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#e2e8f0' }}>
                       HP: {mob.hpCurrent ?? mob.hp} / {mob.maxHp ?? mob.hp}
-                    </div>
-                    <div className="w-28 bg-slate-950 h-2 rounded-full overflow-hidden mt-1 border border-slate-800">
-                      <div 
-                        className="bg-rose-500 h-full transition-all"
-                        style={{ width: `${Math.max(0, Math.min(100, ((mob.hpCurrent ?? mob.hp) / (mob.maxHp ?? mob.hp)) * 100))}%` }}
-                      />
                     </div>
                   </div>
                 </div>
@@ -452,13 +412,15 @@ export default function PlayerScreen({ network, gameState, isHost, dispatchActio
             )}
           </div>
 
-          <div className="p-4 bg-slate-900 border border-slate-800 rounded-xl space-y-2">
-            <h3 className="text-xs font-bold uppercase text-slate-400">Spawn from 5e SRD Bestiary ({allMonsters.length} Monsters)</h3>
-            <div className="flex gap-2">
+          <div style={{ padding: '16px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <h3 style={{ fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', color: '#94a3b8', margin: 0 }}>
+              Spawn from 5e SRD Bestiary ({allMonsters.length} Monsters)
+            </h3>
+            <div style={{ display: 'flex', gap: '8px' }}>
               <select
                 value={spawnMonsterName}
                 onChange={e => setSpawnMonsterName(e.target.value)}
-                className="flex-1 bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm text-white"
+                style={{ flex: 1, background: '#020617', border: '1px solid #334155', borderRadius: '8px', padding: '10px', fontSize: '13px', color: '#fff' }}
               >
                 {allMonsters.map(m => (
                   <option key={m.id} value={m.name}>
@@ -468,7 +430,7 @@ export default function PlayerScreen({ network, gameState, isHost, dispatchActio
               </select>
               <button
                 onClick={handleSpawnMonster}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-indigo-300 font-semibold text-xs rounded-lg border border-slate-700"
+                style={{ padding: '10px 16px', background: '#1e293b', border: '1px solid #334155', color: '#c7d2fe', fontWeight: 'bold', fontSize: '12px', borderRadius: '8px', cursor: 'pointer' }}
               >
                 + Spawn
               </button>
@@ -477,121 +439,121 @@ export default function PlayerScreen({ network, gameState, isHost, dispatchActio
         </div>
       )}
 
+      {/* TAB 3: LOCKED VIEW-ONLY HERO SHEET */}
       {activeTab === 'character' && (
-        <div className="flex-1 overflow-y-auto space-y-4">
-          <div className="p-4 bg-slate-900 border border-slate-800 rounded-xl space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <input
-                type="text"
-                placeholder="Character Name"
-                value={activeChar.name}
-                onChange={e => setActiveChar(prev => ({ ...prev, name: e.target.value }))}
-                className="bg-slate-950 px-3 py-1.5 rounded border border-slate-700 text-base font-bold text-white focus:border-indigo-500 focus:outline-none flex-1"
-              />
-              <div className="flex items-center gap-1">
-                <span className="text-xs text-slate-400">Lvl</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={20}
-                  value={activeChar.level}
-                  onChange={e => setActiveChar(prev => ({ ...prev, level: Math.max(1, parseInt(e.target.value, 10) || 1) }))}
-                  className="w-12 bg-slate-950 border border-slate-700 rounded p-1 text-center text-sm font-bold text-indigo-300"
-                />
+        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div style={{ padding: '16px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <h2 style={{ fontSize: '18px', fontWeight: 'bold', margin: 0, color: '#fff' }}>{hero.name}</h2>
+                  <span style={{ fontSize: '10px', padding: '2px 6px', background: '#1e1b4b', border: '1px solid #3730a3', color: '#c7d2fe', borderRadius: '4px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                    <Lock style={{ width: '10px', height: '10px' }} /> Locked to Room
+                  </span>
+                </div>
+                <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '4px' }}>
+                  {hero.race} • {hero.class} {hero.primarySubclass ? `(${hero.primarySubclass}${hero.secondarySubclass ? ` / ${hero.secondarySubclass}` : ''})` : ''}
+                </div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: '11px', color: '#94a3b8' }}>Total Level {hero.level}</div>
+                <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#818cf8' }}>Proficiency +{profBonus}</div>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 pt-1">
-              <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg flex items-center justify-between">
-                <div>
-                  <div className="text-[10px] uppercase font-bold text-slate-400">Hit Points</div>
-                  <div className="text-lg font-black text-emerald-400">
-                    {activeChar.hpCurrent} / {activeChar.hpMax}
-                  </div>
-                </div>
-                <div className="flex gap-1">
-                  <button
-                    onClick={() => adjustCharacterHp(-1)}
-                    className="p-1.5 bg-slate-800 hover:bg-slate-700 rounded text-rose-400"
-                  >
-                    <Minus className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => adjustCharacterHp(1)}
-                    className="p-1.5 bg-slate-800 hover:bg-slate-700 rounded text-emerald-400"
-                  >
-                    <Plus className="w-4 h-4" />
-                  </button>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+              <div style={{ padding: '10px', background: '#020617', border: '1px solid #1e293b', borderRadius: '8px', textAlign: 'center' }}>
+                <div style={{ fontSize: '10px', color: '#94a3b8', textTransform: 'uppercase' }}>Hit Points</div>
+                <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#34d399', marginTop: '2px' }}>
+                  {hero.hpCurrent} / {hero.hpMax}
                 </div>
               </div>
+              <div style={{ padding: '10px', background: '#020617', border: '1px solid #1e293b', borderRadius: '8px', textAlign: 'center' }}>
+                <div style={{ fontSize: '10px', color: '#94a3b8', textTransform: 'uppercase' }}>Armor Class</div>
+                <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#818cf8', marginTop: '2px' }}>
+                  {hero.ac}
+                </div>
+              </div>
+              <div style={{ padding: '10px', background: '#020617', border: '1px solid #1e293b', borderRadius: '8px', textAlign: 'center' }}>
+                <div style={{ fontSize: '10px', color: '#94a3b8', textTransform: 'uppercase' }}>Equipped Weapon</div>
+                <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#f8fafc', marginTop: '4px' }}>
+                  {hero.weapon?.name || 'Unarmed'} ({hero.weapon?.damageDice || '1d4'})
+                </div>
+              </div>
+            </div>
 
-              <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg flex items-center justify-between">
-                <div>
-                  <div className="text-[10px] uppercase font-bold text-slate-400">Armor Class</div>
-                  <div className="text-lg font-black text-indigo-400">
-                    {calculateAC(activeChar.armor, calculateMod(activeChar.baseStats.dex))}
+            {/* Locked Read-Only Ability Scores */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '6px' }}>
+              {Object.entries(hero.baseStats || {}).map(([stat, val]) => {
+                const mod = calculateMod(val);
+                return (
+                  <div key={stat} style={{ padding: '8px 4px', background: '#020617', border: '1px solid #1e293b', borderRadius: '8px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase', color: '#94a3b8' }}>{stat}</div>
+                    <div style={{ fontSize: '15px', fontWeight: 'bold', color: '#fff', margin: '2px 0' }}>{val}</div>
+                    <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#818cf8' }}>{mod >= 0 ? `+${mod}` : mod}</div>
                   </div>
-                </div>
-                <Shield className="w-5 h-5 text-indigo-500" />
-              </div>
+                );
+              })}
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-2">
-            {Object.entries(activeChar.baseStats).map(([stat, val]) => {
-              const mod = calculateMod(val);
-              return (
-                <div key={stat} className="p-2.5 bg-slate-900 border border-slate-800 rounded-lg text-center">
-                  <div className="text-[10px] uppercase font-bold text-slate-400">{stat}</div>
-                  <input
-                    type="number"
-                    value={val}
-                    onChange={e => handleStatChange(stat, e.target.value)}
-                    className="w-full text-center bg-transparent font-bold text-white text-base focus:outline-none"
-                  />
-                  <div className="text-xs font-semibold text-indigo-400">
-                    {mod >= 0 ? `+${mod}` : mod}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="space-y-2">
-            <h3 className="text-xs font-bold uppercase text-slate-400">Roll Skill Check ({allSpells.length} SRD Spells Loaded)</h3>
-            <div className="grid grid-cols-2 gap-2">
-              {SKILLS.map(skill => (
-                <button
-                  key={skill.id}
-                  onClick={() => handleSkillRoll(skill)}
-                  className="p-2.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-lg flex items-center justify-between text-left transition"
-                >
-                  <span className="text-xs text-slate-200">{skill.name}</span>
-                  <Dices className="w-4 h-4 text-indigo-400" />
-                </button>
-              ))}
+          {/* Clickable Skill Roll Grid */}
+          <div style={{ padding: '16px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <h3 style={{ fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', color: '#94a3b8', margin: 0 }}>
+              Tap a Skill to Roll Check
+            </h3>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+              {SKILLS.map(skill => {
+                const isProf = (hero.proficiencies || []).includes(skill.id);
+                const mod = calculateMod(hero.baseStats?.[skill.stat] ?? 10) + (isProf ? profBonus : 0);
+                return (
+                  <button
+                    key={skill.id}
+                    onClick={() => handleSkillRoll(skill)}
+                    style={{
+                      padding: '10px 12px',
+                      background: isProf ? '#1e1b4b' : '#020617',
+                      border: isProf ? '1px solid #4f46e5' : '1px solid #1e293b',
+                      borderRadius: '8px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      color: '#f8fafc',
+                      fontSize: '12px',
+                      fontWeight: '600',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <span>{skill.name} {isProf ? '★' : ''}</span>
+                    <span style={{ color: '#818cf8', fontFamily: 'monospace', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      {mod >= 0 ? `+${mod}` : mod} <Dices style={{ width: '13px', height: '13px' }} />
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
       )}
 
+      {/* TAB 4: CONNECTED PARTY */}
       {activeTab === 'party' && (
-        <div className="flex-1 overflow-y-auto space-y-3">
-          <div className="p-4 bg-slate-900 border border-slate-800 rounded-xl space-y-3">
-            <h3 className="font-bold text-sm text-emerald-400 flex items-center gap-2">
-              <Users className="w-4 h-4" />
+        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <div style={{ padding: '16px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <h3 style={{ fontSize: '14px', fontWeight: 'bold', color: '#34d399', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Users style={{ width: '16px', height: '16px' }} />
               <span>Connected Party ({gameState.party?.length || 0})</span>
             </h3>
             {(!gameState.party || gameState.party.length === 0) ? (
-              <p className="text-xs text-slate-500">Waiting for party members to sync...</p>
+              <p style={{ fontSize: '12px', color: '#64748b', margin: 0 }}>Waiting for party members to sync...</p>
             ) : (
               gameState.party.map(member => (
-                <div key={member.id} className="p-3 bg-slate-950 border border-slate-800 rounded-lg flex items-center justify-between">
+                <div key={member.id} style={{ padding: '12px', background: '#020617', border: '1px solid #1e293b', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <div>
-                    <div className="font-bold text-sm text-white">{member.name}</div>
-                    <div className="text-xs text-slate-400">Lvl {member.level} {member.class} | AC: {member.ac || 12}</div>
+                    <div style={{ fontWeight: 'bold', fontSize: '14px', color: '#fff' }}>{member.name}</div>
+                    <div style={{ fontSize: '12px', color: '#94a3b8' }}>{member.race} • {member.class} | AC: {member.ac || 12}</div>
                   </div>
-                  <div className="text-sm font-bold text-emerald-400">
+                  <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#34d399' }}>
                     HP: {member.hpCurrent} / {member.hpMax}
                   </div>
                 </div>
@@ -601,52 +563,53 @@ export default function PlayerScreen({ network, gameState, isHost, dispatchActio
         </div>
       )}
 
+      {/* TAB 5: SHARED JOURNAL & LOOT */}
       {activeTab === 'journal' && (
-        <div className="flex-1 overflow-y-auto space-y-4">
-          <div className="p-4 bg-slate-900 border border-slate-800 rounded-xl space-y-3">
-            <h3 className="font-bold text-sm text-indigo-400 flex items-center gap-2">
-              <BookOpen className="w-4 h-4" />
+        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div style={{ padding: '16px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <h3 style={{ fontSize: '14px', fontWeight: 'bold', color: '#818cf8', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <BookOpen style={{ width: '16px', height: '16px' }} />
               <span>Shared Campaign Journal (AI + Party)</span>
             </h3>
 
-            <form onSubmit={handleAddJournalNote} className="flex gap-2">
+            <form onSubmit={handleAddJournalNote} style={{ display: 'flex', gap: '8px' }}>
               <input
                 type="text"
                 placeholder="Add a note to the campaign journal..."
                 value={playerNoteInput}
                 onChange={e => setPlayerNoteInput(e.target.value)}
-                className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500"
+                style={{ flex: 1, background: '#020617', border: '1px solid #334155', borderRadius: '8px', padding: '8px 12px', fontSize: '12px', color: '#fff' }}
               />
               <button
                 type="submit"
-                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg"
+                style={{ padding: '8px 14px', background: '#4f46e5', color: '#fff', fontSize: '12px', fontWeight: 'bold', borderRadius: '8px', border: 'none', cursor: 'pointer' }}
               >
                 + Note
               </button>
             </form>
 
-            <div className="space-y-2">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               {(gameState.journal || []).map((entry, idx) => (
-                <div key={idx} className="p-2.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-300">
+                <div key={idx} style={{ padding: '10px', background: '#020617', border: '1px solid #1e293b', borderRadius: '8px', fontSize: '12px', color: '#cbd5e1' }}>
                   • {entry}
                 </div>
               ))}
             </div>
           </div>
 
-          <div className="p-4 bg-slate-900 border border-slate-800 rounded-xl space-y-3">
-            <h3 className="font-bold text-sm text-amber-400 flex items-center gap-2">
-              <Backpack className="w-4 h-4" />
+          <div style={{ padding: '16px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <h3 style={{ fontSize: '14px', fontWeight: 'bold', color: '#fbbf24', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Backpack style={{ width: '16px', height: '16px' }} />
               <span>Party Loot Pool</span>
             </h3>
-            <div className="space-y-2">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               {(!gameState.lootPool || gameState.lootPool.length === 0) ? (
-                <p className="text-xs text-slate-500">No loot discovered yet.</p>
+                <p style={{ fontSize: '12px', color: '#64748b', margin: 0 }}>No loot discovered yet.</p>
               ) : (
                 gameState.lootPool.map((item, idx) => (
-                  <div key={idx} className="p-2.5 bg-slate-950 border border-slate-800 rounded-lg flex items-center justify-between text-xs">
-                    <span className="font-semibold text-slate-200">{item.name}</span>
-                    <span className="text-slate-400">x{item.qty} ({item.type})</span>
+                  <div key={idx} style={{ padding: '10px', background: '#020617', border: '1px solid #1e293b', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '12px' }}>
+                    <span style={{ fontWeight: 'bold', color: '#f8fafc' }}>{item.name}</span>
+                    <span style={{ color: '#94a3b8' }}>x{item.qty} ({item.type})</span>
                   </div>
                 ))
               )}

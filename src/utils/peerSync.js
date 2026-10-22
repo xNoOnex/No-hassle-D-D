@@ -1,18 +1,20 @@
 import Peer from 'peerjs';
 
 export class GameNetwork {
-  constructor(isHost, roomId, onDataReceived) {
+  constructor(isHost, roomId, onDataReceived, onError = null) {
     this.isHost = isHost;
-    this.roomId = `nohasslednd_${roomId}`;
+    this.roomId = `nohasslednd_${String(roomId).trim().toUpperCase()}`;
     this.onDataReceived = onDataReceived;
+    this.onError = onError;
     this.peer = null;
-    this.connections = {}; 
-    this.hostConnection = null; 
+    this.connections = {};
+    this.hostConnection = null;
     this.pingInterval = null;
+    this.connectTimeout = null;
+    this.hasConnected = false;
   }
 
   init(onReady) {
-    // Uses Google's ultra-reliable STUN servers to punch through Wi-Fi routers
     this.peer = new Peer(this.isHost ? this.roomId : undefined, {
       config: {
         iceServers: [
@@ -22,10 +24,10 @@ export class GameNetwork {
       }
     });
 
-    this.peer.on('open', (id) => {
-      console.log('Network connected. ID:', id);
+    this.peer.on('open', () => {
       if (this.isHost) {
-        onReady();
+        this.hasConnected = true;
+        if (onReady) onReady();
       } else {
         this.connectToHost(onReady);
       }
@@ -35,16 +37,25 @@ export class GameNetwork {
       this.peer.on('connection', (conn) => this.setupConnection(conn));
     }
 
-    // Aggressive Auto-Reconnect
     this.peer.on('disconnected', () => {
-      console.warn('Connection lost. Reconnecting...');
-      this.peer.reconnect();
+      if (this.hasConnected && this.peer && !this.peer.destroyed) {
+        this.peer.reconnect();
+      }
     });
 
     this.peer.on('error', (err) => {
-      console.error('Network error:', err);
-      if (err.type === 'peer-unavailable' && !this.isHost) {
-        setTimeout(() => this.connectToHost(onReady), 2000); // Retry every 2s if DM drops
+      if (this.connectTimeout) clearTimeout(this.connectTimeout);
+      if (!this.isHost && !this.hasConnected) {
+        if (this.peer) this.peer.destroy();
+        if (this.onError) {
+          this.onError(
+            err.type === 'peer-unavailable'
+              ? 'No active Host found at that room code.'
+              : `Connection error: ${err.type || err.message}`
+          );
+        }
+      } else if (this.isHost && err.type === 'unavailable-id') {
+        if (this.onError) this.onError('Room code is already in use. Try again.');
       }
     });
   }
@@ -53,27 +64,43 @@ export class GameNetwork {
     const conn = this.peer.connect(this.roomId, { reliable: true });
     this.hostConnection = conn;
     this.setupConnection(conn);
-    
+
+    this.connectTimeout = setTimeout(() => {
+      if (!this.hasConnected) {
+        if (this.peer) this.peer.destroy();
+        if (this.onError) {
+          this.onError('Connection timed out. Make sure the Host has the room open.');
+        }
+      }
+    }, 7000);
+
     conn.on('open', () => {
-      onReady();
-      // SILENT HEARTBEAT: Keeps the connection alive indefinitely
+      if (this.connectTimeout) clearTimeout(this.connectTimeout);
+      this.hasConnected = true;
+      if (onReady) onReady();
       this.pingInterval = setInterval(() => {
         if (conn.open) conn.send({ type: 'PING' });
-      }, 3000); 
+      }, 3000);
     });
   }
 
   setupConnection(conn) {
     conn.on('data', (data) => {
-      if (data.type === 'PING') return; // Ignore silent heartbeats
-      this.onDataReceived(data, conn);
+      if (data && data.type === 'PING') return;
+      if (this.onDataReceived) this.onDataReceived(data, conn);
     });
-    
+
     if (this.isHost) {
-      conn.on('open', () => { this.connections[conn.peer] = conn; });
-      conn.on('close', () => { delete this.connections[conn.peer]; });
+      conn.on('open', () => {
+        this.connections[conn.peer] = conn;
+      });
+      conn.on('close', () => {
+        delete this.connections[conn.peer];
+      });
     } else {
-      conn.on('close', () => { clearInterval(this.pingInterval); });
+      conn.on('close', () => {
+        if (this.pingInterval) clearInterval(this.pingInterval);
+      });
     }
   }
 

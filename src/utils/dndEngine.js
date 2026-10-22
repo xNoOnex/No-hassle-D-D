@@ -1,7 +1,21 @@
-// CORE ABILITY AND DERIVED STATS
-export const calculateMod = (score = 10) => Math.floor((score - 10) / 2);
+export const CLASS_HIT_DICE = {
+  Barbarian: 12,
+  Fighter: 10,
+  Paladin: 10,
+  Ranger: 10,
+  Bard: 8,
+  Cleric: 8,
+  Druid: 8,
+  Monk: 8,
+  Rogue: 8,
+  Warlock: 8,
+  Sorcerer: 6,
+  Wizard: 6
+};
 
-export const calculateProficiency = (level = 1) => Math.floor((level - 1) / 4) + 2;
+export const calculateMod = (score = 10) => Math.floor((Number(score) - 10) / 2);
+
+export const calculateProficiency = (totalLevel = 1) => Math.floor((Math.max(1, Number(totalLevel)) - 1) / 4) + 2;
 
 export const calculateAC = (armor, dexMod = 0, hasShield = false) => {
   let base = 10 + dexMod;
@@ -20,7 +34,34 @@ export const calculateMaxHP = (conMod = 0, hitDie = 10, level = 1) => {
   return Math.max(1, firstLevel + avgPerLevel * (level - 1));
 };
 
-// PHYSICAL DICE SIMULATION
+export const calculateMulticlassMaxHP = (
+  conMod = 0,
+  primaryClass = 'Fighter',
+  primaryLevel = 1,
+  secondaryClass = 'None',
+  secondaryLevel = 0
+) => {
+  const pLvl = Math.max(1, Number(primaryLevel) || 1);
+  const sLvl = secondaryClass && secondaryClass !== 'None' ? Math.max(0, Number(secondaryLevel) || 0) : 0;
+  const hd1 = CLASS_HIT_DICE[primaryClass] || 8;
+  const hd2 = CLASS_HIT_DICE[secondaryClass] || 8;
+
+  // Level 1 of primary class gets full hit die
+  let totalHp = hd1 + conMod;
+
+  // Additional levels in primary class
+  if (pLvl > 1) {
+    totalHp += (Math.floor(hd1 / 2) + 1 + conMod) * (pLvl - 1);
+  }
+
+  // Levels in secondary class (5e multiclass rules)
+  if (sLvl > 0) {
+    totalHp += (Math.floor(hd2 / 2) + 1 + conMod) * sLvl;
+  }
+
+  return Math.max(1, totalHp);
+};
+
 export const rollPhysical = (sides, count = 1, modifier = 0) => {
   const rolls = [];
   let sum = 0;
@@ -76,7 +117,6 @@ export const executeCheck = (statScore, isProficient, profBonus, rollType = 'nor
   };
 };
 
-// DICE STRING PARSER (e.g. "1d6+2", "2d8", "5")
 export const parseAndRollDice = (diceStr = '1d6') => {
   if (typeof diceStr === 'number') {
     return { total: diceStr, rolls: [diceStr], text: `${diceStr}` };
@@ -99,7 +139,6 @@ export const parseAndRollDice = (diceStr = '1d6') => {
   };
 };
 
-// DETERMINISTIC COMBAT RESOLUTION
 export const resolveAttack = ({
   attackerName,
   defenderName,
@@ -148,7 +187,6 @@ export const resolveAttack = ({
   };
 };
 
-// INITIATIVE QUEUE MANAGEMENT
 export const buildInitiativeQueue = (party = [], monsters = []) => {
   const combatants = [];
 
@@ -179,7 +217,7 @@ export const buildInitiativeQueue = (party = [], monsters = []) => {
       ac: m.ac || 10,
       hpCurrent: m.hpCurrent ?? m.hp ?? 10,
       hpMax: m.maxHp ?? m.hp ?? 10,
-      actions: m.actions || [{ name: 'Strike', attackBonus: 0, damageDice: '1d6', damageBonus: 0 }]
+      actions: m.actions || [{ name: 'Strike', attackBonus: 3, damageDice: '1d6', damageBonus: 1 }]
     });
   });
 
@@ -211,12 +249,11 @@ export const advanceTurn = (combatState) => {
   };
 };
 
-// AUTOMATED MONSTER ACTION ENGINE
 export const executeAutomatedMonsterTurn = (monster, party = []) => {
   const livingParty = party.filter(p => (p.hpCurrent ?? p.hp ?? 0) > 0);
   if (livingParty.length === 0) {
     return {
-      actionSummary: `${monster.name} stands menacingly over the fallen party.`,
+      actionSummary: `${monster.name} stands over the fallen party.`,
       attackResult: null,
       updatedParty: party,
       targetedPlayer: null
@@ -224,7 +261,7 @@ export const executeAutomatedMonsterTurn = (monster, party = []) => {
   }
 
   const target = livingParty[Math.floor(Math.random() * livingParty.length)];
-  const action = monster.actions?.[0] || { name: 'Strike', attackBonus: 0, damageDice: '1d6', damageBonus: 0 };
+  const action = monster.actions?.[0] || { name: 'Strike', attackBonus: 3, damageDice: '1d6', damageBonus: 1 };
   const targetAC = target.ac || 10;
 
   const attackRes = resolveAttack({
