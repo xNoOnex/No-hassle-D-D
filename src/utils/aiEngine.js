@@ -1,43 +1,57 @@
 import { getApiKey, getSelectedModel } from './aiConfig.js';
-
-const SYSTEM_PROMPT = `You are the Dungeon Master for a D&D 5e campaign.
-Tone & Rules:
-- Gritty, uncensored, immersive dark fantasy storytelling.
-- Do not roll dice or calculate math. The app calculates all rolls, hits, misses, damage, and HP changes beforehand and provides them in [BRACKETS].
-- Narrate the exact mechanical result provided in 2-4 punchy sentences.
-- To record an important plot point, clue, or quest update in the party's journal, include: <journal>Entry text here</journal>
-- To award items or gold to the party, include: <loot name="Item Name" qty="1" type="Weapon|Armor|Potion|Gear" />
-- If the story triggers a new combat ambush or enemy encounter, spawn monsters into the combat tracker using standard 5e monster names: <spawn name="Goblin" count="2" />`;
+import { getMonstersByCR } from '../data/index.js';
 
 export async function generateNarrativeTurn({ gameState, resolvedAction, recentHistory = [] }) {
   const apiKey = getApiKey();
   if (!apiKey) {
-    throw new Error('OpenRouter API key missing. Open Settings (gear icon) on the Host device to save your key.');
+    throw new Error('OpenRouter API key missing. Tap the Gear icon in the top bar to save your key.');
   }
 
+  const avgLevel = gameState.party?.length
+    ? Math.max(1, Math.round(gameState.party.reduce((s, p) => s + (p.level || 1), 0) / gameState.party.length))
+    : 1;
+
+  // Sample 25 CR-appropriate monsters from the 330+ 5e SRD Bestiary for the AI to pick from
+  const crPool = getMonstersByCR(Math.max(1, avgLevel + 1));
+  const sampleNames = crPool
+    .sort(() => 0.5 - Math.random())
+    .slice(0, 25)
+    .map(m => `${m.name} (CR ${m.cr})`)
+    .join(', ');
+
+  const systemPrompt = `You are the automated Dungeon Master for a D&D 5e campaign.
+Rules:
+1. Gritty, uncensored, dark fantasy storytelling.
+2. NEVER roll dice or invent damage numbers. All player & monster dice rolls, hits, misses, skill checks, and HP updates are pre-calculated by the app engine and handed to you inside [BRACKETS].
+3. Narrate the exact mechanical result provided in 2-4 punchy sentences.
+4. When a story beat, ambush, or hostile reaction starts a fight (and no monsters are currently active), spawn monsters directly from the 5e SRD Bestiary using: <spawn name="Exact Monster Name" count="1" />
+   Available 5e SRD Monsters for Party Level ${avgLevel}: ${sampleNames || 'Goblin, Bandit, Wolf, Skeleton, Zombie, Orc, Cultist'}.
+5. To log important quest clues, NPC secrets, or lore in the party journal, include: <journal>Short note here</journal>
+6. To grant story rewards or items, include: <loot name="Item Name" qty="1" type="Gear" />`;
+
   const partyList = (gameState.party || [])
-    .map(p => `${p.name} (Lvl ${p.level || 1} ${p.class || 'Hero'}, HP: ${p.hpCurrent}/${p.hpMax}, AC: ${p.ac || 12})`)
-    .join(', ') || 'No heroes registered';
+    .map(p => `${p.name} (${p.race} ${p.class}, HP: ${p.hpCurrent}/${p.hpMax}, AC: ${p.ac})`)
+    .join(', ') || 'Solo Adventurer';
 
   const monsterList = (gameState.activeMonsters || [])
     .map(m => `${m.name} (HP: ${m.hpCurrent}/${m.maxHp}, AC: ${m.ac})`)
     .join(', ') || 'None';
 
-  const turnInfo = gameState.combatActive && gameState.turnQueue?.length
-    ? `Round ${gameState.round || 1}, Current Turn: ${gameState.turnQueue[gameState.currentTurnIndex || 0]?.name || 'Unknown'}`
-    : 'Out of Combat (Exploration)';
+  const activeTurnName = gameState.combatActive && gameState.turnQueue?.length
+    ? gameState.turnQueue[gameState.currentTurnIndex || 0]?.name || 'Party'
+    : 'Exploration (Out of Combat)';
 
-  const contextMessage = `[MODULE: ${gameState.currentModule || 'Open World'}]
-[COMBAT STATUS: ${turnInfo}]
+  const contextMessage = `[LOCATION/ACT: ${gameState.currentModule || 'Oakhaven Region'}]
+[MODE: ${gameState.combatActive ? `COMBAT ROUND ${gameState.round || 1} (Active Turn: ${activeTurnName})` : 'EXPLORATION'}]
 [PARTY: ${partyList}]
 [ACTIVE HOSTILES: ${monsterList}]
 [RECENT JOURNAL: ${(gameState.journal || []).slice(-3).join(' | ')}]
-[PLAYER/ENGINE ACTION: ${resolvedAction}]
+[ENGINE DICE & ACTION LOG: ${resolvedAction}]
 
-Narrate the outcome:`;
+Narrate the outcome vividly:`;
 
   const messages = [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: systemPrompt },
     ...recentHistory.slice(-6),
     { role: 'user', content: contextMessage }
   ];
@@ -60,7 +74,7 @@ Narrate the outcome:`;
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`OpenRouter Error (${response.status}): ${errorText}`);
+    throw new Error(`OpenRouter (${response.status}): ${errorText}`);
   }
 
   const payload = await response.json();
@@ -74,9 +88,9 @@ Narrate the outcome:`;
     const qtyMatch = attrs.match(/qty="([^"]+)"/i);
     const typeMatch = attrs.match(/type="([^"]+)"/i);
     return {
-      name: nameMatch ? nameMatch[1] : 'Mystery Item',
+      name: nameMatch ? nameMatch[1] : 'Adventuring Gear',
       qty: qtyMatch ? parseInt(qtyMatch[1], 10) || 1 : 1,
-      type: typeMatch ? typeMatch[1] : 'Gear'
+      type: typeMatch ? typeMatch[1] : 'Treasure'
     };
   });
 
@@ -86,7 +100,7 @@ Narrate the outcome:`;
     const countMatch = attrs.match(/count="([^"]+)"/i);
     return {
       name: nameMatch ? nameMatch[1] : 'Goblin',
-      count: countMatch ? Math.min(10, Math.max(1, parseInt(countMatch[1], 10) || 1)) : 1
+      count: countMatch ? Math.min(6, Math.max(1, parseInt(countMatch[1], 10) || 1)) : 1
     };
   });
 
@@ -97,7 +111,7 @@ Narrate the outcome:`;
     .trim();
 
   return {
-    narration: cleanNarration || 'The scene shifts.',
+    narration: cleanNarration || 'The scene unfolds.',
     journalEntries,
     lootItems,
     spawnedMonsters

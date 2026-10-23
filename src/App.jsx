@@ -15,72 +15,16 @@ import {
   calculateMod,
   calculateAC,
   calculateMulticlassMaxHP,
-  calculateProficiency
+  rollStat4d6DropLowest,
+  buildInitiativeQueue,
+  executeAutomatedMonsterTurn,
+  rollD100LootTable
 } from './utils/dndEngine';
+import { RACES, BACKGROUNDS, CLASSES, SUBCLASSES, WEAPONS_LIST, ARMOR_LIST, SKILLS_5E } from './data/rules5e.js';
 import { getMonster } from './data/index';
 import PlayerScreen from './components/PlayerScreen';
 
 const generateRoomCode = () => Math.random().toString(36).substring(2, 6).toUpperCase();
-
-const RACES = ['Human', 'Elf', 'Dwarf', 'Halfling', 'Dragonborn', 'Tiefling', 'Half-Orc', 'Gnome', 'Half-Elf'];
-const CLASSES = ['Fighter', 'Barbarian', 'Rogue', 'Ranger', 'Paladin', 'Monk', 'Wizard', 'Sorcerer', 'Warlock', 'Cleric', 'Druid', 'Bard'];
-const SUBCLASSES = {
-  Fighter: ['Champion', 'Battle Master', 'Eldritch Knight'],
-  Barbarian: ['Berserker', 'Totem Warrior'],
-  Rogue: ['Thief', 'Assassin', 'Arcane Trickster'],
-  Ranger: ['Hunter', 'Beast Master'],
-  Paladin: ['Oath of Devotion', 'Oath of Vengeance'],
-  Monk: ['Way of the Open Hand', 'Way of Shadow'],
-  Wizard: ['Evocation', 'Necromancy', 'Abjuration'],
-  Sorcerer: ['Draconic Bloodline', 'Wild Magic'],
-  Warlock: ['The Fiend', 'The Great Old One', 'The Hexblade'],
-  Cleric: ['Life Domain', 'War Domain', 'Tempest Domain'],
-  Druid: ['Circle of the Land', 'Circle of the Moon'],
-  Bard: ['College of Lore', 'College of Valor']
-};
-
-const WEAPONS_LIST = [
-  { name: 'Longsword', damageDice: '1d8', stat: 'str' },
-  { name: 'Greatsword', damageDice: '2d6', stat: 'str' },
-  { name: 'Greataxe', damageDice: '1d12', stat: 'str' },
-  { name: 'Rapier', damageDice: '1d8', stat: 'dex' },
-  { name: 'Shortsword', damageDice: '1d6', stat: 'dex' },
-  { name: 'Dagger', damageDice: '1d4', stat: 'dex' },
-  { name: 'Longbow', damageDice: '1d8', stat: 'dex' },
-  { name: 'Quarterstaff', damageDice: '1d6', stat: 'str' }
-];
-
-const ARMOR_LIST = [
-  { name: 'Unarmored', base: 10, type: 'light' },
-  { name: 'Leather Armor', base: 11, type: 'light' },
-  { name: 'Studded Leather', base: 12, type: 'light' },
-  { name: 'Chain Shirt', base: 13, type: 'medium' },
-  { name: 'Scale Mail', base: 14, type: 'medium' },
-  { name: 'Half Plate', base: 15, type: 'medium' },
-  { name: 'Chain Mail', base: 16, type: 'heavy' },
-  { name: 'Plate Armor', base: 18, type: 'heavy' }
-];
-
-const ALL_SKILLS = [
-  { id: 'acrobatics', name: 'Acrobatics' },
-  { id: 'animal_handling', name: 'Animal Handling' },
-  { id: 'arcana', name: 'Arcana' },
-  { id: 'athletics', name: 'Athletics' },
-  { id: 'deception', name: 'Deception' },
-  { id: 'history', name: 'History' },
-  { id: 'insight', name: 'Insight' },
-  { id: 'intimidation', name: 'Intimidation' },
-  { id: 'investigation', name: 'Investigation' },
-  { id: 'medicine', name: 'Medicine' },
-  { id: 'nature', name: 'Nature' },
-  { id: 'perception', name: 'Perception' },
-  { id: 'performance', name: 'Performance' },
-  { id: 'persuasion', name: 'Persuasion' },
-  { id: 'religion', name: 'Religion' },
-  { id: 'sleight_of_hand', name: 'Sleight of Hand' },
-  { id: 'stealth', name: 'Stealth' },
-  { id: 'survival', name: 'Survival' }
-];
 
 const normalizeGameState = (raw = {}, fallbackName = 'Campaign') => ({
   campaignName: raw.campaignName || fallbackName,
@@ -99,17 +43,18 @@ const normalizeGameState = (raw = {}, fallbackName = 'Campaign') => ({
           timestamp: Date.now(),
           actor: 'Director',
           text: 'You sit in the dimly lit parlor of Madame Elara. The town power crystal was stolen last night, and your party has been summoned.',
-          mechanicalSummary: 'Session Ready.'
+          mechanicalSummary: 'Session Initialized.',
+          diceTrays: []
         }
       ],
   journal: Array.isArray(raw.journal)
     ? raw.journal
-    : (typeof raw.journal === 'string' && raw.journal.trim() ? [raw.journal.trim()] : ['Quest: Recover the Stolen Core of Oakhaven.']),
+    : (typeof raw.journal === 'string' && raw.journal.trim() ? [raw.journal.trim()] : ['[Quest] Recover the Stolen Core of Oakhaven.']),
   lootPool: Array.isArray(raw.lootPool) ? raw.lootPool : []
 });
 
 export default function App() {
-  const [homeTab, setHomeTab] = useState('lobby'); // 'lobby' | 'vault'
+  const [homeTab, setHomeTab] = useState('lobby');
   const [sessions, setSessions] = useState([]);
   const [characters, setCharacters] = useState([]);
   const [selectedCharId, setSelectedCharId] = useState('');
@@ -128,27 +73,27 @@ export default function App() {
   const [modelInput, setModelInput] = useState(getSelectedModel());
   const [isProcessingAi, setIsProcessingAi] = useState(false);
 
-  // Character Creator State (Dual-Tree 5e)
   const [charName, setCharName] = useState('');
   const [charRace, setCharRace] = useState('Human');
+  const [charBackground, setCharBackground] = useState('Soldier');
   const [charClass1, setCharClass1] = useState('Fighter');
   const [charSub1, setCharSub1] = useState('Champion');
   const [charLvl1, setCharLvl1] = useState(1);
   const [charClass2, setCharClass2] = useState('None');
   const [charSub2, setCharSub2] = useState('');
   const [charLvl2, setCharLvl2] = useState(0);
+
   const [charStats, setCharStats] = useState({ str: 15, dex: 13, con: 14, int: 10, wis: 12, cha: 10 });
+  const [statRollLogs, setStatRollLogs] = useState({});
   const [charWeaponName, setCharWeaponName] = useState('Longsword');
   const [charArmorName, setCharArmorName] = useState('Leather Armor');
   const [charShield, setCharShield] = useState(false);
-  const [charProficiencies, setCharProficiencies] = useState(['athletics', 'perception']);
+  const [charProficiencies, setCharProficiencies] = useState(['athletics', 'intimidation']);
 
   const activeSessionRef = useRef(null);
   activeSessionRef.current = activeSession;
-
   const activeCharRef = useRef(null);
   activeCharRef.current = activeCharacter;
-
   const networkRef = useRef(null);
   networkRef.current = network;
 
@@ -163,7 +108,6 @@ export default function App() {
     }
   }, [activeSession]);
 
-  // Sync room updates back into the locked vault character automatically
   useEffect(() => {
     if (!activeSession || !activeCharRef.current) return;
     const party = activeSession.gameState?.party || [];
@@ -181,6 +125,30 @@ export default function App() {
     }
   }, [activeSession?.gameState?.party]);
 
+  useEffect(() => {
+    const bg = BACKGROUNDS.find(b => b.name === charBackground) || BACKGROUNDS[0];
+    setCharProficiencies([...bg.lockedSkills]);
+  }, [charBackground, charClass1, charClass2]);
+
+  const handleRollSingleStat = (statKey) => {
+    const res = rollStat4d6DropLowest();
+    setCharStats(prev => ({ ...prev, [statKey]: res.sum }));
+    setStatRollLogs(prev => ({ ...prev, [statKey]: res }));
+  };
+
+  const handleRollAllStats = () => {
+    const keys = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
+    const newStats = {};
+    const newLogs = {};
+    keys.forEach(k => {
+      const res = rollStat4d6DropLowest();
+      newStats[k] = res.sum;
+      newLogs[k] = res;
+    });
+    setCharStats(newStats);
+    setStatRollLogs(newLogs);
+  };
+
   const handleCreateCharacter = (e) => {
     e.preventDefault();
     if (!charName.trim()) return;
@@ -190,23 +158,34 @@ export default function App() {
     const sLvl = hasSecondary ? Math.max(1, Math.min(20 - pLvl, Number(charLvl2) || 1)) : 0;
     const totalLevel = pLvl + sLvl;
 
-    const conMod = calculateMod(charStats.con);
-    const dexMod = calculateMod(charStats.dex);
-    const selectedArmor = ARMOR_LIST.find(a => a.name === charArmorName) || ARMOR_LIST[1];
+    const raceObj = RACES.find(r => r.name === charRace) || RACES[0];
+    const finalStats = {
+      str: charStats.str + (raceObj.bonuses.str || 0),
+      dex: charStats.dex + (raceObj.bonuses.dex || 0),
+      con: charStats.con + (raceObj.bonuses.con || 0),
+      int: charStats.int + (raceObj.bonuses.int || 0),
+      wis: charStats.wis + (raceObj.bonuses.wis || 0),
+      cha: charStats.cha + (raceObj.bonuses.cha || 0)
+    };
+
+    const conMod = calculateMod(finalStats.con);
+    const dexMod = calculateMod(finalStats.dex);
+    const wisMod = calculateMod(finalStats.wis);
+
+    const selectedArmor = ARMOR_LIST.find(a => a.name === charArmorName) || ARMOR_LIST[2];
     const selectedWeapon = WEAPONS_LIST.find(w => w.name === charWeaponName) || WEAPONS_LIST[0];
+    const classString = hasSecondary ? `${charClass1} ${pLvl} / ${charClass2} ${sLvl}` : `${charClass1} ${pLvl}`;
 
     const maxHp = calculateMulticlassMaxHP(conMod, charClass1, pLvl, hasSecondary ? charClass2 : 'None', sLvl);
-    const acVal = calculateAC(selectedArmor, dexMod, charShield);
-
-    const classDisplay = hasSecondary
-      ? `${charClass1} ${pLvl} / ${charClass2} ${sLvl}`
-      : `${charClass1} ${pLvl}`;
+    const acVal = calculateAC(selectedArmor, dexMod, charShield, conMod, wisMod, classString);
+    const savingThrows = CLASSES[charClass1]?.savingThrows || ['str', 'con'];
 
     const newChar = {
       id: `char_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
       name: charName.trim(),
       race: charRace,
-      class: classDisplay,
+      background: charBackground,
+      class: classString,
       primaryClass: charClass1,
       primarySubclass: charSub1 || (SUBCLASSES[charClass1]?.[0] ?? ''),
       primaryLevel: pLvl,
@@ -214,7 +193,8 @@ export default function App() {
       secondarySubclass: hasSecondary ? (charSub2 || (SUBCLASSES[charClass2]?.[0] ?? '')) : '',
       secondaryLevel: sLvl,
       level: totalLevel,
-      baseStats: { ...charStats },
+      baseStats: finalStats,
+      savingThrows,
       armor: selectedArmor,
       hasShield: charShield,
       weapon: selectedWeapon,
@@ -250,6 +230,37 @@ export default function App() {
     setCharacters(getCharacters());
   };
 
+  // Helper: Automatically run all consecutive monster turns in the initiative queue
+  const runConsecutiveMonsterTurns = (state, combinedTrays, extraSummaries) => {
+    if (!state.combatActive || !state.turnQueue?.length || !state.activeMonsters?.length) return;
+
+    let safety = 0;
+    while (safety < 12 && state.combatActive && state.turnQueue.length > 0) {
+      safety += 1;
+      const currentUnit = state.turnQueue[state.currentTurnIndex || 0];
+      if (!currentUnit || currentUnit.type !== 'monster') break;
+
+      const liveMob = state.activeMonsters.find(
+        m => (m.instanceId || m.id) === currentUnit.id || m.name === currentUnit.name
+      );
+
+      if (liveMob && (liveMob.hpCurrent ?? liveMob.hp ?? 0) > 0) {
+        const mobTurn = executeAutomatedMonsterTurn(liveMob, state.party);
+        state.party = mobTurn.updatedParty;
+        if (mobTurn.diceTrays?.length) combinedTrays.push(...mobTurn.diceTrays);
+        extraSummaries.push(`[Round ${state.round} - ${liveMob.name}] ${mobTurn.actionSummary}`);
+        state.journal = [...state.journal, `[Combat Rd ${state.round}] ${mobTurn.actionSummary}`];
+      }
+
+      let nextIdx = (state.currentTurnIndex || 0) + 1;
+      if (nextIdx >= state.turnQueue.length) {
+        nextIdx = 0;
+        state.round = (state.round || 1) + 1;
+      }
+      state.currentTurnIndex = nextIdx;
+    }
+  };
+
   const processHostAction = async (actionPayload, currentGameState) => {
     const state = { ...normalizeGameState(currentGameState) };
     const {
@@ -259,12 +270,9 @@ export default function App() {
       character,
       updatedParty,
       updatedMonsters,
-      combatActive,
-      turnQueue,
-      currentTurnIndex,
-      round,
       newJournalEntry,
       newLootItem,
+      diceTrays = [],
       skipAi
     } = actionPayload;
 
@@ -276,38 +284,61 @@ export default function App() {
       return state;
     }
 
+    const combinedTrays = [...diceTrays];
+    const extraSummaries = [];
+    const wasInCombat = state.combatActive && state.activeMonsters.length > 0;
+
     if (Array.isArray(updatedParty)) state.party = updatedParty;
+
     if (Array.isArray(updatedMonsters)) {
+      const slain = updatedMonsters.filter(m => (m.hpCurrent ?? m.hp ?? 0) <= 0);
+      slain.forEach(s => {
+        state.journal = [...state.journal, `[Slain] ${s.name} was defeated by ${actorName || 'the party'}.`];
+      });
+
       state.activeMonsters = updatedMonsters.filter(m => (m.hpCurrent ?? m.hp ?? 0) > 0);
-      if (state.activeMonsters.length === 0 && state.combatActive) {
+      const aliveIds = new Set(state.activeMonsters.map(m => m.instanceId || m.id));
+      state.turnQueue = (state.turnQueue || []).filter(u => u.type === 'player' || aliveIds.has(u.id));
+
+      if (wasInCombat && state.activeMonsters.length === 0) {
         state.combatActive = false;
         state.turnQueue = [];
+        state.currentTurnIndex = 0;
+        const lootDrop = rollD100LootTable();
+        combinedTrays.push(...lootDrop.diceTrays);
+        state.lootPool = [...state.lootPool, lootDrop.item];
+        const goldPerHero = Math.max(1, Math.floor(lootDrop.gold / Math.max(1, state.party.length)));
+        state.party = state.party.map(p => ({ ...p, gold: (p.gold || 0) + goldPerHero }));
+        const victoryMsg = `Combat Victory! Rolled d100 Loot: Found ${lootDrop.item.name} and ${lootDrop.gold} Gold (+${goldPerHero} GP each).`;
+        extraSummaries.push(victoryMsg);
+        state.journal = [...state.journal, `[Victory & Loot] ${victoryMsg}`];
       }
     }
-    if (typeof combatActive === 'boolean') state.combatActive = combatActive;
-    if (Array.isArray(turnQueue)) state.turnQueue = turnQueue;
-    if (typeof currentTurnIndex === 'number') state.currentTurnIndex = currentTurnIndex;
-    if (typeof round === 'number') state.round = round;
+
     if (newJournalEntry) state.journal = [...state.journal, newJournalEntry];
     if (newLootItem) state.lootPool = [...state.lootPool, newLootItem];
 
-    if (skipAi) {
-      if (summary) {
-        state.storyLog = [
-          ...state.storyLog,
-          {
-            id: `log_${Date.now()}_${Math.random()}`,
-            timestamp: Date.now(),
-            actor: actorName || 'System',
-            text: summary,
-            mechanicalSummary: null
-          }
-        ];
+    // Auto-record player action in the campaign journal
+    if (summary && !skipAi) {
+      state.journal = [...state.journal, `[Action] ${summary}`];
+    }
+
+    // If combat is ongoing after a player's turn, advance turn queue and auto-run any monster turns
+    if (state.combatActive && state.activeMonsters.length > 0 && state.turnQueue.length > 0 && !skipAi) {
+      let nextIdx = (state.currentTurnIndex || 0) + 1;
+      if (nextIdx >= state.turnQueue.length) {
+        nextIdx = 0;
+        state.round = (state.round || 1) + 1;
       }
+      state.currentTurnIndex = nextIdx;
+      runConsecutiveMonsterTurns(state, combinedTrays, extraSummaries);
+    }
+
+    if (skipAi) {
       return state;
     }
 
-    const resolvedSummary = summary || `${actorName || 'Party'} took action.`;
+    const fullMechanicalSummary = [summary, ...extraSummaries].filter(Boolean).join(' | ');
     setIsProcessingAi(true);
     try {
       const recentHistory = state.storyLog.slice(-6).map(entry => ({
@@ -317,10 +348,11 @@ export default function App() {
 
       const aiRes = await generateNarrativeTurn({
         gameState: state,
-        resolvedAction: resolvedSummary,
+        resolvedAction: fullMechanicalSummary,
         recentHistory
       });
 
+      // If AI spawned monsters from the 5e Bestiary, auto-roll initiative and start combat
       if (aiRes.spawnedMonsters?.length) {
         const newlySpawned = [];
         aiRes.spawnedMonsters.forEach(req => {
@@ -332,7 +364,7 @@ export default function App() {
             hp: 15,
             maxHp: 15,
             stats: { str: 12, dex: 12, con: 12, int: 10, wis: 10, cha: 10 },
-            actions: [{ name: 'Strike', attackBonus: 3, damageDice: '1d6', damageBonus: 1 }]
+            actions: [{ name: 'Strike', attackBonus: 4, damageDice: '1d6', damageBonus: 2 }]
           };
           for (let i = 0; i < req.count; i++) {
             newlySpawned.push({
@@ -343,16 +375,40 @@ export default function App() {
             });
           }
         });
+
         state.activeMonsters = [...state.activeMonsters, ...newlySpawned];
+        const initRes = buildInitiativeQueue(state.party, state.activeMonsters);
+        state.combatActive = true;
+        state.turnQueue = initRes.queue;
+        state.currentTurnIndex = 0;
+        state.round = 1;
+        combinedTrays.push(...initRes.initiativeTrays);
+
+        const orderStr = initRes.queue.map(u => `${u.name} (${u.initiative})`).join(' -> ');
+        state.journal = [
+          ...state.journal,
+          `[Encounter Started] ${newlySpawned.map(m => m.name).join(', ')} appeared! Initiative: ${orderStr}`
+        ];
+
+        // If monsters won initiative at index 0, auto-execute their opening turns immediately
+        runConsecutiveMonsterTurns(state, combinedTrays, extraSummaries);
       }
 
       if (aiRes.journalEntries?.length) {
-        state.journal = [...state.journal, ...aiRes.journalEntries];
+        state.journal = [...state.journal, ...aiRes.journalEntries.map(j => `[Story Note] ${j}`)];
+      } else if (aiRes.narration) {
+        const shortSnippet = aiRes.narration.split('.')[0] + '.';
+        state.journal = [...state.journal, `[Story] ${shortSnippet}`];
       }
 
       if (aiRes.lootItems?.length) {
         state.lootPool = [...state.lootPool, ...aiRes.lootItems];
+        aiRes.lootItems.forEach(item => {
+          state.journal = [...state.journal, `[Loot Gained] ${item.name} x${item.qty}`];
+        });
       }
+
+      const finalSummaryText = [summary, ...extraSummaries].filter(Boolean).join('\n');
 
       state.storyLog = [
         ...state.storyLog,
@@ -361,7 +417,8 @@ export default function App() {
           timestamp: Date.now(),
           actor: 'Director',
           text: aiRes.narration,
-          mechanicalSummary: resolvedSummary
+          mechanicalSummary: finalSummaryText,
+          diceTrays: combinedTrays
         }
       ];
     } catch (err) {
@@ -372,7 +429,8 @@ export default function App() {
           timestamp: Date.now(),
           actor: 'System',
           text: `[AI Director Error: ${err.message}]`,
-          mechanicalSummary: resolvedSummary
+          mechanicalSummary: fullMechanicalSummary,
+          diceTrays: combinedTrays
         }
       ];
     } finally {
@@ -564,6 +622,18 @@ export default function App() {
   };
 
   const unlockedCharacters = characters.filter(c => !c.lockedRoomId);
+  const currentClassData = CLASSES[charClass1] || CLASSES['Fighter'];
+  const secondaryMulticlassBonus = ['Bard', 'Ranger', 'Rogue'].includes(charClass2) ? 1 : 0;
+  const maxClassSkills = currentClassData.skillCount + secondaryMulticlassBonus;
+  const currentBgData = BACKGROUNDS.find(b => b.name === charBackground) || BACKGROUNDS[0];
+  const lockedBgSkills = currentBgData.lockedSkills;
+  const combinedSkillPool = Array.from(new Set([
+    ...currentClassData.skillPool,
+    ...(charClass2 !== 'None' && CLASSES[charClass2] ? CLASSES[charClass2].skillPool : [])
+  ]));
+  const selectableSkillPool = combinedSkillPool.filter(s => !lockedBgSkills.includes(s));
+  const chosenCustomSkills = charProficiencies.filter(s => !lockedBgSkills.includes(s));
+  const currentRaceObj = RACES.find(r => r.name === charRace) || RACES[0];
 
   return (
     <div style={{ minHeight: '100vh', background: '#090d16', color: '#f8fafc', display: 'flex', flexDirection: 'column', fontFamily: 'sans-serif' }}>
@@ -768,13 +838,13 @@ export default function App() {
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <form onSubmit={handleCreateCharacter} style={{ padding: '20px', background: '#0f172a', borderRadius: '12px', border: '1px solid #334155', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <form onSubmit={handleCreateCharacter} style={{ padding: '20px', background: '#0f172a', borderRadius: '12px', border: '1px solid #334155', display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#818cf8', fontWeight: 'bold', fontSize: '15px' }}>
                     <UserPlus style={{ width: '18px', height: '18px' }} />
-                    <span>Forge New 5e Hero (Supports Dual-Class Tree)</span>
+                    <span>Forge New 5e Hero (Complete SRD Rules & Dual-Tree)</span>
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '8px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                     <div>
                       <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Hero Name</label>
                       <input
@@ -783,19 +853,38 @@ export default function App() {
                         placeholder="e.g. Kaelen"
                         value={charName}
                         onChange={e => setCharName(e.target.value)}
-                        style={{ width: '100%', boxSizing: 'border-box', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '8px 10px', color: '#fff', fontSize: '13px' }}
+                        style={{ width: '100%', boxSizing: 'border-box', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '10px', color: '#fff', fontSize: '13px' }}
                       />
                     </div>
                     <div>
-                      <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Race</label>
+                      <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Race (Applies Stat Bonuses)</label>
                       <select
                         value={charRace}
                         onChange={e => setCharRace(e.target.value)}
-                        style={{ width: '100%', boxSizing: 'border-box', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '8px', color: '#fff', fontSize: '13px' }}
+                        style={{ width: '100%', boxSizing: 'border-box', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '10px', color: '#fff', fontSize: '13px' }}
                       >
-                        {RACES.map(r => <option key={r} value={r}>{r}</option>)}
+                        {RACES.map(r => (
+                          <option key={r.name} value={r.name}>
+                            {r.name} ({Object.entries(r.bonuses).map(([k, v]) => `+${v} ${k.toUpperCase()}`).join(', ')})
+                          </option>
+                        ))}
                       </select>
                     </div>
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>5e Background (Auto-Locks 2 Skills)</label>
+                    <select
+                      value={charBackground}
+                      onChange={e => setCharBackground(e.target.value)}
+                      style={{ width: '100%', boxSizing: 'border-box', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '10px', color: '#fff', fontSize: '13px' }}
+                    >
+                      {BACKGROUNDS.map(b => (
+                        <option key={b.name} value={b.name}>
+                          {b.name} (Locks: {b.lockedSkills.map(s => s.replace(/_/g, ' ')).join(', ')})
+                        </option>
+                      ))}
+                    </select>
                   </div>
 
                   <div style={{ padding: '12px', background: '#020617', borderRadius: '8px', border: '1px solid #1e293b', display: 'grid', gridTemplateColumns: '1fr 1fr 70px', gap: '8px' }}>
@@ -805,11 +894,11 @@ export default function App() {
                         value={charClass1}
                         onChange={e => {
                           setCharClass1(e.target.value);
-                          setCharSub1(SUBCLASSES[e.target.value]?.[0] || '');
+                          setCharSub1((SUBCLASSES[e.target.value] || [])[0] || '');
                         }}
-                        style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '6px', color: '#fff', fontSize: '12px' }}
+                        style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '8px', color: '#fff', fontSize: '12px' }}
                       >
-                        {CLASSES.map(c => <option key={c} value={c}>{c}</option>)}
+                        {Object.keys(CLASSES).map(c => <option key={c} value={c}>{c} (d{CLASSES[c].hitDie})</option>)}
                       </select>
                     </div>
                     <div>
@@ -817,7 +906,7 @@ export default function App() {
                       <select
                         value={charSub1}
                         onChange={e => setCharSub1(e.target.value)}
-                        style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '6px', color: '#fff', fontSize: '12px' }}
+                        style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '8px', color: '#fff', fontSize: '12px' }}
                       >
                         {(SUBCLASSES[charClass1] || []).map(sc => <option key={sc} value={sc}>{sc}</option>)}
                       </select>
@@ -830,7 +919,7 @@ export default function App() {
                         max={20}
                         value={charLvl1}
                         onChange={e => setCharLvl1(Math.max(1, Math.min(20, parseInt(e.target.value, 10) || 1)))}
-                        style={{ width: '100%', boxSizing: 'border-box', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '6px', color: '#fff', fontSize: '12px', textAlign: 'center' }}
+                        style={{ width: '100%', boxSizing: 'border-box', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '8px', color: '#fff', fontSize: '12px', textAlign: 'center' }}
                       />
                     </div>
                   </div>
@@ -848,13 +937,13 @@ export default function App() {
                             setCharSub2('');
                           } else {
                             setCharLvl2(1);
-                            setCharSub2(SUBCLASSES[val]?.[0] || '');
+                            setCharSub2((SUBCLASSES[val] || [])[0] || '');
                           }
                         }}
-                        style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '6px', color: '#fff', fontSize: '12px' }}
+                        style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '8px', color: '#fff', fontSize: '12px' }}
                       >
                         <option value="None">None (Single Class)</option>
-                        {CLASSES.filter(c => c !== charClass1).map(c => <option key={c} value={c}>{c}</option>)}
+                        {Object.keys(CLASSES).filter(c => c !== charClass1).map(c => <option key={c} value={c}>{c} (d{CLASSES[c].hitDie})</option>)}
                       </select>
                     </div>
                     <div>
@@ -863,7 +952,7 @@ export default function App() {
                         disabled={charClass2 === 'None'}
                         value={charSub2}
                         onChange={e => setCharSub2(e.target.value)}
-                        style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '6px', color: '#fff', fontSize: '12px' }}
+                        style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '8px', color: '#fff', fontSize: '12px' }}
                       >
                         {charClass2 === 'None' ? <option value="">N/A</option> : (SUBCLASSES[charClass2] || []).map(sc => <option key={sc} value={sc}>{sc}</option>)}
                       </select>
@@ -877,86 +966,152 @@ export default function App() {
                         max={19}
                         value={charLvl2}
                         onChange={e => setCharLvl2(Math.max(1, Math.min(20 - charLvl1, parseInt(e.target.value, 10) || 1)))}
-                        style={{ width: '100%', boxSizing: 'border-box', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '6px', color: '#fff', fontSize: '12px', textAlign: 'center' }}
+                        style={{ width: '100%', boxSizing: 'border-box', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '8px', color: '#fff', fontSize: '12px', textAlign: 'center' }}
                       />
                     </div>
                   </div>
 
-                  <div>
-                    <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Ability Scores</label>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '6px' }}>
-                      {Object.entries(charStats).map(([stat, val]) => (
-                        <div key={stat} style={{ background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '6px', textAlign: 'center' }}>
-                          <div style={{ fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase', color: '#94a3b8' }}>{stat}</div>
-                          <input
-                            type="number"
-                            min={3}
-                            max={20}
-                            value={val}
-                            onChange={e => setCharStats(prev => ({ ...prev, [stat]: Math.max(3, Math.min(20, parseInt(e.target.value, 10) || 10)) }))}
-                            style={{ width: '100%', background: 'transparent', border: 'none', color: '#fff', fontWeight: 'bold', fontSize: '14px', textAlign: 'center' }}
-                          />
-                          <div style={{ fontSize: '10px', color: '#818cf8' }}>
-                            {calculateMod(val) >= 0 ? `+${calculateMod(val)}` : calculateMod(val)}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <label style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 'bold' }}>
+                        Initial Ability Scores (Roll 4d6 Drop Lowest + Racial Bonus)
+                      </label>
+                      <button
+                        type="button"
+                        onClick={handleRollAllStats}
+                        style={{ padding: '6px 12px', background: '#4f46e5', color: '#fff', fontSize: '11px', fontWeight: 'bold', borderRadius: '6px', border: 'none', cursor: 'pointer' }}
+                      >
+                        🎲 Roll All 6 Stats (4d6)
+                      </button>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+                      {Object.entries(charStats).map(([stat, val]) => {
+                        const raceBonus = currentRaceObj.bonuses[stat] || 0;
+                        const totalVal = val + raceBonus;
+                        const mod = calculateMod(totalVal);
+                        const log = statRollLogs[stat];
+                        return (
+                          <div key={stat} style={{ background: '#020617', border: '1px solid #334155', borderRadius: '8px', padding: '10px', display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'center' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                              <span style={{ fontSize: '11px', fontWeight: 'bold', textTransform: 'uppercase', color: '#818cf8' }}>{stat}</span>
+                              <button
+                                type="button"
+                                onClick={() => handleRollSingleStat(stat)}
+                                style={{ padding: '3px 7px', background: '#1e1b4b', border: '1px solid #4f46e5', color: '#c7d2fe', fontSize: '10px', fontWeight: 'bold', borderRadius: '4px', cursor: 'pointer' }}
+                              >
+                                🎲 4d6
+                              </button>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span style={{ fontSize: '18px', fontWeight: 'bold', color: '#fff' }}>{totalVal}</span>
+                              <span style={{ fontSize: '12px', fontWeight: 'bold', color: mod >= 0 ? '#34d399' : '#f87171' }}>
+                                ({mod >= 0 ? `+${mod}` : mod})
+                              </span>
+                            </div>
+                            <div style={{ fontSize: '10px', color: '#94a3b8' }}>
+                              Base {val} {raceBonus > 0 ? `+ ${raceBonus} Race` : ''}
+                            </div>
+                            {log && (
+                              <div style={{ fontSize: '10px', color: '#fcd34d', fontFamily: 'monospace' }}>
+                                [{log.rawRolls.join(', ')}] drop {log.dropped}
+                              </div>
+                            )}
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
 
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '8px', alignItems: 'end' }}>
                     <div>
-                      <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Weapon</label>
+                      <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>5e Weapon ({WEAPONS_LIST.length} Options)</label>
                       <select
                         value={charWeaponName}
                         onChange={e => setCharWeaponName(e.target.value)}
-                        style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '8px', color: '#fff', fontSize: '12px' }}
+                        style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '10px', color: '#fff', fontSize: '12px' }}
                       >
-                        {WEAPONS_LIST.map(w => <option key={w.name} value={w.name}>{w.name} ({w.damageDice})</option>)}
+                        {WEAPONS_LIST.map(w => (
+                          <option key={w.name} value={w.name}>
+                            {w.name} ({w.damageDice} • {w.finesse ? 'Finesse' : w.ranged ? 'Ranged' : 'Melee'})
+                          </option>
+                        ))}
                       </select>
                     </div>
                     <div>
-                      <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Armor</label>
+                      <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>5e Armor ({ARMOR_LIST.length} Options)</label>
                       <select
                         value={charArmorName}
                         onChange={e => setCharArmorName(e.target.value)}
-                        style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '8px', color: '#fff', fontSize: '12px' }}
+                        style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '10px', color: '#fff', fontSize: '12px' }}
                       >
-                        {ARMOR_LIST.map(a => <option key={a.name} value={a.name}>{a.name} (Base {a.base})</option>)}
+                        {ARMOR_LIST.map(a => (
+                          <option key={a.name} value={a.name}>
+                            {a.name} (AC {a.base} • {a.type})
+                          </option>
+                        ))}
                       </select>
                     </div>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 10px', background: '#020617', border: '1px solid #334155', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px', background: '#020617', border: '1px solid #334155', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', height: '38px', boxSizing: 'border-box' }}>
                       <input type="checkbox" checked={charShield} onChange={e => setCharShield(e.target.checked)} />
-                      <span>Shield (+2 AC)</span>
+                      <span>Shield (+2)</span>
                     </label>
                   </div>
 
-                  <div>
-                    <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '6px' }}>Skill Proficiencies (Tap to toggle)</label>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px', background: '#020617', borderRadius: '8px', border: '1px solid #1e293b' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '4px' }}>
+                      <span style={{ fontSize: '11px', color: '#818cf8', fontWeight: 'bold' }}>
+                        Pick Class Skills ({chosenCustomSkills.length} / {maxClassSkills} Selected)
+                      </span>
+                      <span style={{ fontSize: '10px', color: '#34d399' }}>
+                        Locked Saves: {(currentClassData.savingThrows || []).map(s => s.toUpperCase()).join(', ')} | Locked Background: {lockedBgSkills.map(s => s.replace(/_/g, ' ')).join(', ')}
+                      </span>
+                    </div>
+
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                      {ALL_SKILLS.map(sk => {
-                        const active = charProficiencies.includes(sk.id);
+                      {SKILLS_5E.map(sk => {
+                        const isLockedBg = lockedBgSkills.includes(sk.id);
+                        const isAllowedByClass = selectableSkillPool.includes(sk.id);
+                        const isChosen = chosenCustomSkills.includes(sk.id);
+                        const canPickMore = chosenCustomSkills.length < maxClassSkills;
+
+                        if (isLockedBg) {
+                          return (
+                            <span
+                              key={sk.id}
+                              style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 'bold', background: '#064e3b', border: '1px solid #059669', color: '#6ee7b7' }}
+                            >
+                              🔒 {sk.name} (Background)
+                            </span>
+                          );
+                        }
+
+                        if (!isAllowedByClass) return null;
+
                         return (
                           <button
                             type="button"
                             key={sk.id}
                             onClick={() => {
-                              setCharProficiencies(prev =>
-                                prev.includes(sk.id) ? prev.filter(x => x !== sk.id) : [...prev, sk.id]
-                              );
+                              if (isChosen) {
+                                setCharProficiencies(prev => prev.filter(s => s !== sk.id));
+                              } else if (canPickMore) {
+                                setCharProficiencies(prev => [...prev, sk.id]);
+                              }
                             }}
                             style={{
-                              padding: '5px 10px',
+                              padding: '6px 12px',
                               borderRadius: '6px',
                               fontSize: '11px',
                               fontWeight: '600',
-                              cursor: 'pointer',
-                              border: active ? '1px solid #6366f1' : '1px solid #334155',
-                              background: active ? '#1e1b4b' : '#020617',
-                              color: active ? '#c7d2fe' : '#94a3b8'
+                              cursor: canPickMore || isChosen ? 'pointer' : 'not-allowed',
+                              border: isChosen ? '1px solid #6366f1' : '1px solid #334155',
+                              background: isChosen ? '#1e1b4b' : '#0f172a',
+                              color: isChosen ? '#c7d2fe' : '#94a3b8',
+                              opacity: !isChosen && !canPickMore ? 0.45 : 1
                             }}
                           >
-                            {sk.name}
+                            {sk.name} {isChosen ? '✓' : ''}
                           </button>
                         );
                       })}
@@ -965,7 +1120,7 @@ export default function App() {
 
                   <button
                     type="submit"
-                    style={{ padding: '12px', background: '#4f46e5', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer' }}
+                    style={{ padding: '14px', background: '#4f46e5', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer' }}
                   >
                     Save Hero to Vault
                   </button>
