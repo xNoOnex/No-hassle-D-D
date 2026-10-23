@@ -72,21 +72,80 @@ export const calculateMulticlassMaxHP = (
   return Math.max(1, totalHp);
 };
 
-// Returns highest spell level unlocked (0 = Cantrips only, 1..9 = leveled spells)
+// Authentic 5e Spell Unlock Rules per Class & Subclass
+const getSingleClassMaxSpellLevel = (className, subclassName, classLevel) => {
+  const lvl = Number(classLevel || 0);
+  if (!className || className === 'None' || lvl <= 0) return -1;
+
+  // Full Casters + Artificer (cast at Level 1)
+  if (['Bard', 'Cleric', 'Druid', 'Sorcerer', 'Warlock', 'Wizard', 'Artificer'].includes(className)) {
+    return Math.min(9, Math.ceil(lvl / 2));
+  }
+  // Half Casters (Ranger & Paladin unlock spells at Level 2, no cantrips)
+  if (['Paladin', 'Ranger'].includes(className)) {
+    if (lvl < 2) return -1;
+    return Math.min(5, Math.ceil(lvl / 4));
+  }
+  // Third Casters (only specific magical subclasses unlock spells at Level 3)
+  if (className === 'Fighter' && subclassName === 'Eldritch Knight') {
+    return lvl < 3 ? -1 : Math.min(4, Math.ceil(lvl / 6));
+  }
+  if (className === 'Rogue' && subclassName === 'Arcane Trickster') {
+    return lvl < 3 ? -1 : Math.min(4, Math.ceil(lvl / 6));
+  }
+  if (className === 'BloodHunter' && subclassName === 'Order of the Profane Soul') {
+    return lvl < 3 ? -1 : Math.min(4, Math.ceil(lvl / 6));
+  }
+  return -1;
+};
+
 export const getMaxUnlockedSpellLevel = (hero) => {
-  const pClass = CLASSES[hero?.primaryClass];
-  const sClass = CLASSES[hero?.secondaryClass];
-  const isCaster = pClass?.casterType || sClass?.casterType;
-  if (!isCaster) return 0;
-  const lvl = Number(hero?.level || 1);
-  return Math.min(9, Math.ceil(lvl / 2));
+  const pMax = getSingleClassMaxSpellLevel(hero?.primaryClass, hero?.primarySubclass, hero?.primaryLevel ?? hero?.level ?? 1);
+  const sMax = getSingleClassMaxSpellLevel(hero?.secondaryClass, hero?.secondarySubclass, hero?.secondaryLevel ?? 0);
+  return Math.max(pMax, sMax);
 };
 
 export const getMaxSpellSlots = (hero) => {
   const maxSpellLvl = getMaxUnlockedSpellLevel(hero);
-  if (maxSpellLvl <= 0) return 0;
+  if (maxSpellLvl < 1) return 0;
   const lvl = Number(hero?.level || 1);
-  return Math.min(15, 2 + lvl * 2);
+  return Math.min(12, 1 + lvl);
+};
+
+// Filters SRD spells strictly to the hero's unlocked class spell list & spell level
+export const getUnlockedSpellsForHero = (hero, allSpells = []) => {
+  const maxLvl = getMaxUnlockedSpellLevel(hero);
+  if (maxLvl < 0) return [];
+
+  const mapClassToSrdTag = (cls, sub) => {
+    if (!cls || cls === 'None') return null;
+    if (cls === 'Fighter' && sub === 'Eldritch Knight') return 'wizard';
+    if (cls === 'Rogue' && sub === 'Arcane Trickster') return 'wizard';
+    if (cls === 'BloodHunter' && sub === 'Order of the Profane Soul') return 'warlock';
+    if (cls === 'Artificer') return 'wizard';
+    return cls.toLowerCase();
+  };
+
+  const allowedTags = new Set();
+  const pMax = getSingleClassMaxSpellLevel(hero?.primaryClass, hero?.primarySubclass, hero?.primaryLevel ?? hero?.level ?? 1);
+  if (pMax >= 0) {
+    const tag = mapClassToSrdTag(hero?.primaryClass, hero?.primarySubclass);
+    if (tag) allowedTags.add(tag);
+  }
+  const sMax = getSingleClassMaxSpellLevel(hero?.secondaryClass, hero?.secondarySubclass, hero?.secondaryLevel ?? 0);
+  if (sMax >= 0) {
+    const tag = mapClassToSrdTag(hero?.secondaryClass, hero?.secondarySubclass);
+    if (tag) allowedTags.add(tag);
+  }
+
+  // Paladins and Rangers do not get Level 0 Cantrips in 5e unless dual-classed with a cantrip caster
+  const hasCantripClass = ['bard', 'cleric', 'druid', 'sorcerer', 'warlock', 'wizard'].some(t => allowedTags.has(t));
+
+  return allSpells.filter(sp => {
+    if (sp.level > maxLvl) return false;
+    if (sp.level === 0 && !hasCantripClass) return false;
+    return (sp.classes || []).some(c => allowedTags.has(c));
+  });
 };
 
 export const rollPhysical = (sides, count = 1, modifier = 0, label = '') => {
@@ -398,47 +457,58 @@ export const rollD100LootTable = () => {
   };
 };
 
-// Awards XP and automatically levels up heroes, rolling Hit Dice + unlocking spells & skills
-export const awardXpAndCheckLevelUp = (party = [], xpGain = 50) => {
+// Authentic 5e Leveling: Activates Planned Secondary Class at Lvl 2, rolls Hit Dice, unlocks spells/skills
+export const awardXpAndCheckLevelUp = (party = [], xpGain = 10) => {
   const levelUpLogs = [];
   const levelUpTrays = [];
 
   const updatedParty = party.map(hero => {
     const currentXp = (hero.xp || 0) + xpGain;
-    let currentLvl = hero.level || 1;
-    let nextThreshold = XP_THRESHOLDS[currentLvl] || 999999;
+    const currentLvl = hero.level || 1;
+    const nextThreshold = XP_THRESHOLDS[currentLvl] || 999999;
 
     if (currentLvl < 20 && currentXp >= nextThreshold) {
       const newLvl = currentLvl + 1;
-      const newPrimaryLvl = (hero.primaryLevel || currentLvl) + 1;
-      const hd = CLASSES[hero.primaryClass]?.hitDie || 10;
+      const hasSecondaryPlan = hero.secondaryClass && hero.secondaryClass !== 'None';
+      const curPrimaryLvl = hero.primaryLevel || 1;
+      const curSecondaryLvl = hero.secondaryLevel || 0;
+
+      // At Level 2, if a Secondary Class was chosen, unlock Level 1 of that Secondary Class
+      const levelingSecondary = hasSecondaryPlan && (curSecondaryLvl === 0 || newLvl % 2 === 0);
+      const nextPrimaryLvl = levelingSecondary ? curPrimaryLvl : curPrimaryLvl + 1;
+      const nextSecondaryLvl = levelingSecondary ? curSecondaryLvl + 1 : curSecondaryLvl;
+      const leveledClassName = levelingSecondary ? hero.secondaryClass : hero.primaryClass;
+
+      const hd = CLASSES[leveledClassName]?.hitDie || 10;
       const conMod = calculateMod(hero.baseStats?.con ?? 12);
-      const hpRoll = rollPhysical(hd, 1, conMod, `${hero.name} Level ${newLvl} HP`);
+      const hpRoll = rollPhysical(hd, 1, conMod, `${hero.name} Level ${newLvl} (${leveledClassName}) HP`);
       const hpGain = Math.max(1, hpRoll.total);
       levelUpTrays.push({ ...hpRoll, outcome: `+${hpGain} Max HP`, isSuccess: true });
 
       const newProficiencies = [...(hero.proficiencies || [])];
       let unlockedSkillMsg = '';
-      // Unlock a new skill proficiency every 2 levels
-      if (newLvl % 2 === 0) {
-        const classPool = CLASSES[hero.primaryClass]?.skillPool || SKILLS_5E.map(s => s.id);
-        const unlearned = classPool.find(s => !newProficiencies.includes(s))
-          || SKILLS_5E.map(s => s.id).find(s => !newProficiencies.includes(s));
+
+      // 5e Multiclass Rule: Unlocking Level 1 of Bard, Ranger, or Rogue grants +1 skill from their pool
+      const getsMulticlassSkill = levelingSecondary && nextSecondaryLvl === 1 && ['Bard', 'Ranger', 'Rogue'].includes(hero.secondaryClass);
+      if (getsMulticlassSkill || newLvl % 3 === 0) {
+        const pool = CLASSES[leveledClassName]?.skillPool || SKILLS_5E.map(s => s.id);
+        const unlearned = pool.find(s => !newProficiencies.includes(s));
         if (unlearned) {
           newProficiencies.push(unlearned);
           unlockedSkillMsg = ` | Unlocked Skill: ${unlearned.replace(/_/g, ' ')}`;
         }
       }
 
-      const classDisplay = hero.secondaryClass && hero.secondaryClass !== 'None'
-        ? `${hero.primaryClass} ${newPrimaryLvl} / ${hero.secondaryClass} ${hero.secondaryLevel || 1}`
-        : `${hero.primaryClass || 'Fighter'} ${newPrimaryLvl}`;
+      const classDisplay = hasSecondaryPlan && nextSecondaryLvl > 0
+        ? `${hero.primaryClass} ${nextPrimaryLvl} / ${hero.secondaryClass} ${nextSecondaryLvl}`
+        : `${hero.primaryClass || 'Fighter'} ${nextPrimaryLvl}`;
 
       const updatedHero = {
         ...hero,
         xp: currentXp,
         level: newLvl,
-        primaryLevel: newPrimaryLvl,
+        primaryLevel: nextPrimaryLvl,
+        secondaryLevel: nextSecondaryLvl,
         class: classDisplay,
         hpMax: (hero.hpMax || 12) + hpGain,
         hpCurrent: (hero.hpCurrent || 12) + hpGain,
@@ -448,8 +518,9 @@ export const awardXpAndCheckLevelUp = (party = [], xpGain = 50) => {
       updatedHero.spellSlotsMax = maxSlots;
       updatedHero.spellSlotsCurrent = maxSlots;
 
+      const spellTier = getMaxUnlockedSpellLevel(updatedHero);
       levelUpLogs.push(
-        `🎉 LEVEL UP! ${hero.name} reached Level ${newLvl}! (+${hpGain} Max HP, Spell Level ${getMaxUnlockedSpellLevel(updatedHero)} Unlocked${unlockedSkillMsg})`
+        `🎉 LEVEL UP! ${hero.name} is now Level ${newLvl} (${classDisplay})! +${hpGain} Max HP${spellTier > 0 ? ` | Spell Lvl ${spellTier} Unlocked` : ''}${unlockedSkillMsg}`
       );
       return updatedHero;
     }
@@ -460,7 +531,6 @@ export const awardXpAndCheckLevelUp = (party = [], xpGain = 50) => {
   return { updatedParty, levelUpLogs, levelUpTrays };
 };
 
-// Equips an item from Loot Pool or Inventory directly onto the Hero and updates AC / Weapon stats
 export const equipItemToHero = (hero, itemObj) => {
   const itemName = typeof itemObj === 'string' ? itemObj : (itemObj?.name || '');
   const lower = itemName.toLowerCase();

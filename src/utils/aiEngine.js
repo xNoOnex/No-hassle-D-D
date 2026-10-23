@@ -1,25 +1,40 @@
 import { getApiKey, getSelectedModel } from './aiConfig.js';
 import { getMonstersByCR } from '../data/index.js';
 
-// Generates a unique opening campaign story, setting, and quest hook for every new room
+// Strips out training-data leaks, wiki hallucinations, and XML tags
+function cleanAiNarration(raw = '') {
+  return raw
+    .replace(/<journal>[\s\S]*?<\/journal>/gi, '')
+    .replace(/<loot\s+[^>]*\/>/gi, '')
+    .replace(/<spawn\s+[^>]*\/>/gi, '')
+    .replace(/\[End of[\s\S]*$/i, '')
+    .replace(/\[\[[\s\S]*$/i, '')
+    .replace(/Create a new wiki[\s\S]*$/i, '')
+    .replace(/\[Session Ended\.?\]/gi, '')
+    .replace(/<[^>]+>/g, '')
+    .trim();
+}
+
 export async function generateCampaignIntro({ campaignName, party = [] }) {
   const apiKey = getApiKey();
   if (!apiKey) {
     return {
-      narration: `Welcome to "${campaignName}". Add your OpenRouter API key in Settings (top-right gear icon) so the AI Director can generate your world.`,
+      narration: `Welcome to "${campaignName}". Tap the Gear icon in the top-right corner to save your OpenRouter API key so the AI Director can generate your world.`,
       quest: `Explore ${campaignName} and uncover its central threat.`
     };
   }
 
   const partyDesc = party
     .map(p => `${p.name} (Lvl ${p.level} ${p.race} ${p.class}, Background: ${p.background || 'Adventurer'})`)
-    .join(', ') || 'a lone adventurer';
+    .join(', ') || 'an adventurer';
 
-  const prompt = `Create a brand-new, gritty dark fantasy D&D 5e opening scene for a campaign titled "${campaignName}" featuring ${partyDesc}.
-Rules:
-- Invent a fresh location, atmosphere, and immediate conflict or hook (do NOT use Madame Elara or Oakhaven).
-- Keep the opening narration to 3-4 immersive sentences ending with an immediate situation for the party to react to.
-- Include one <journal>Quest: ...</journal> tag defining the main objective.`;
+  const prompt = `You are a master D&D 5e Dungeon Master. Write the opening scene for a brand-new dark fantasy campaign titled "${campaignName}" starring ${partyDesc}.
+Formatting Rules:
+- Write 2 vivid, atmospheric paragraphs (4 to 6 sentences total).
+- Paragraph 1: Establish the gritty setting, atmosphere, and why ${partyDesc} is here.
+- Paragraph 2: Present an immediate, concrete encounter, mystery, or NPC interaction happening right in front of them, and end by asking what they do.
+- Include exactly one <journal>Quest: ...</journal> tag at the very end.
+- Do NOT write meta-labels, wiki pages, or "[End of scene]" notes.`;
 
   const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
@@ -32,9 +47,9 @@ Rules:
     body: JSON.stringify({
       model: getSelectedModel(),
       messages: [{ role: 'user', content: prompt }],
-      temperature: 0.85,
-      max_tokens: 300,
-      stop: ['\n[', '[Player', '[Session']
+      temperature: 0.8,
+      max_tokens: 380,
+      stop: ['[End of', '[[', 'Create a new wiki', '<|im_end|>', '<|eot_id|>']
     })
   });
 
@@ -45,11 +60,8 @@ Rules:
   const payload = await response.json();
   const raw = payload.choices?.[0]?.message?.content || '';
   const questMatch = raw.match(/<journal>([\s\S]*?)<\/journal>/i);
-  const quest = questMatch ? questMatch[1].trim() : `Quest: Survive the trials of ${campaignName}.`;
-  const narration = raw
-    .replace(/<journal>[\s\S]*?<\/journal>/gi, '')
-    .replace(/<[^>]+>/g, '')
-    .trim();
+  const quest = questMatch ? questMatch[1].trim() : `Quest: Survive and uncover the truth of ${campaignName}.`;
+  const narration = cleanAiNarration(raw);
 
   return { narration: narration || `Your journey in ${campaignName} begins.`, quest };
 }
@@ -72,18 +84,20 @@ export async function generateNarrativeTurn({ gameState, resolvedAction, rollFai
     .join(', ');
 
   const failureRule = rollFailed
-    ? `CRITICAL ENFORCEMENT: The player's dice roll FAILED ([FAIL] or [MISS]). You MUST enforce failure! NPCs MUST refuse demands, requests for free items/bags of holding/weapons MUST be rejected, and stealth/search/attack failures MUST trigger complications or danger. Do NOT output <loot> tags on a failed roll!`
-    : `The player's roll succeeded. Reward clever actions appropriately, but keep loot grounded to their level.`;
+    ? `CRITICAL ENFORCEMENT: The dice roll FAILED ([FAIL] or [MISS]). You MUST narrate a setback, refusal, or complication! NPCs must reject demands, locks stay shut, stealth alerts guards, and attacks miss. Do NOT output <loot> tags on a failed roll.`
+    : `The dice roll SUCCEEDED. Narrate how the character's skill or strike pays off and advances the scene.`;
 
   const systemPrompt = `You are the automated Dungeon Master for a D&D 5e campaign ("${gameState.campaignName}").
-Strict Rules:
-1. Gritty, uncensored dark fantasy storytelling. Write ONLY the DM narration for this single turn (2-4 punchy sentences).
-2. NEVER write dialogue or actions for the player, NEVER simulate future turns, and NEVER write "[Session Ended]" or "[Player: ...]".
-3. ${failureRule}
-4. When a story beat, failed stealth roll, or hostile reaction triggers combat, spawn monsters from the 5e SRD Bestiary using: <spawn name="Exact Monster Name" count="1" />
-   Available 5e SRD Monsters for Level ${avgLevel}: ${sampleNames || 'Goblin, Bandit, Wolf, Skeleton, Zombie, Orc, Cultist'}.
-5. To log important quest clues or world events, include: <journal>Short note here</journal>
-6. Only when a player genuinely earns or discovers a physical item on a SUCCESSFUL roll, include: <loot name="Item Name" qty="1" type="Weapon|Armor|Potion|Gear" />`;
+Storytelling & Continuity Rules:
+1. Write 2 cohesive, immersive paragraphs (4 to 6 sentences total) that flow directly from the previous scene.
+2. Paragraph 1: Describe the immediate physical result of the player's action and dice roll, plus any monster counter-attacks listed in the log.
+3. Paragraph 2: Advance the scene forward—show how NPCs, enemies, or the environment react, and set up the immediate situation for the next turn.
+4. NEVER write actions or dialogue for the players, NEVER output wiki articles or "[End of...]" tags.
+5. ${failureRule}
+6. If the story triggers a new fight (and Active Hostiles is "None"), spawn monsters from the 5e SRD Bestiary using: <spawn name="Exact Monster Name" count="1" />
+   Valid 5e SRD Monsters for Level ${avgLevel}: ${sampleNames || 'Goblin, Bandit, Wolf, Skeleton, Zombie, Orc, Cultist'}.
+7. To record a major plot clue, include: <journal>Short clue here</journal>
+8. Only when a player genuinely finds or earns an item on a SUCCESSFUL roll, include: <loot name="Item Name" qty="1" type="Weapon|Armor|Potion|Gear" />`;
 
   const partyList = (gameState.party || [])
     .map(p => `${p.name} (Lvl ${p.level || 1} ${p.race} ${p.class}, HP: ${p.hpCurrent}/${p.hpMax}, AC: ${p.ac})`)
@@ -98,13 +112,13 @@ Strict Rules:
 [PARTY: ${partyList}]
 [ACTIVE HOSTILES: ${monsterList}]
 [RECENT JOURNAL: ${(gameState.journal || []).slice(-3).join(' | ')}]
-[ENGINE DICE & ACTION LOG: ${resolvedAction}]
+[CURRENT TURN DICE & ACTION LOG: ${resolvedAction}]
 
-Narrate the immediate outcome (2-4 sentences, no fake player turns):`;
+Write 2 cohesive paragraphs narrating this turn's outcome and setting up the next turn:`;
 
   const messages = [
     { role: 'system', content: systemPrompt },
-    ...recentHistory.slice(-5),
+    ...recentHistory.slice(-6),
     { role: 'user', content: contextMessage }
   ];
 
@@ -120,8 +134,8 @@ Narrate the immediate outcome (2-4 sentences, no fake player turns):`;
       model: getSelectedModel(),
       messages,
       temperature: 0.75,
-      max_tokens: 320,
-      stop: ['\n[', '[Hy:', '[Player', '[Session', 'Narrate the']
+      max_tokens: 420,
+      stop: ['[End of', '[[', 'Create a new wiki', '<|im_end|>', '<|eot_id|>', '\n[CAMPAIGN:']
     })
   });
 
@@ -135,7 +149,6 @@ Narrate the immediate outcome (2-4 sentences, no fake player turns):`;
 
   const journalEntries = [...rawOutput.matchAll(/<journal>([\s\S]*?)<\/journal>/gi)].map(m => m[1].trim());
 
-  // Hard-block loot tags if the player failed their roll
   const lootItems = rollFailed
     ? []
     : [...rawOutput.matchAll(/<loot\s+([^>]+)\/>/gi)].map(m => {
@@ -160,15 +173,10 @@ Narrate the immediate outcome (2-4 sentences, no fake player turns):`;
     };
   });
 
-  const cleanNarration = rawOutput
-    .replace(/<journal>[\s\S]*?<\/journal>/gi, '')
-    .replace(/<loot\s+[^>]*\/>/gi, '')
-    .replace(/<spawn\s+[^>]*\/>/gi, '')
-    .replace(/\[Session Ended\.?\]/gi, '')
-    .trim();
+  const cleanNarration = cleanAiNarration(rawOutput);
 
   return {
-    narration: cleanNarration || 'The tension in the air thickens.',
+    narration: cleanNarration || 'The shadows shift around the party.',
     journalEntries,
     lootItems,
     spawnedMonsters

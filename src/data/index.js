@@ -52,9 +52,15 @@ export function normalizeMonster(raw) {
 export function normalizeSpell(raw) {
   if (!raw || !raw.name) return null;
   const lvl = raw.level ?? 0;
-  const slotDmg = raw.damage?.damage_at_slot_level?.[String(lvl || 1)]
+  const isHeal = /cure wounds|healing word|heal|prayer of healing|mass cure/i.test(raw.name);
+  const rawDmg = raw.damage?.damage_at_slot_level?.[String(lvl || 1)]
     || raw.damage?.damage_at_character_level?.['1']
-    || (lvl === 0 ? '1d8' : `${Math.max(1, lvl)}d8`);
+    || (raw.heal_at_slot_level ? raw.heal_at_slot_level[String(lvl || 1)] : null)
+    || (isHeal ? '1d8' : null);
+
+  const classList = Array.isArray(raw.classes)
+    ? raw.classes.map(c => (typeof c === 'string' ? c : c.name || '').toLowerCase()).filter(Boolean)
+    : ['wizard', 'sorcerer', 'warlock', 'cleric', 'druid', 'bard'];
 
   return {
     id: raw.index || raw.id || raw.name.toLowerCase().replace(/\s+/g, '_'),
@@ -65,8 +71,10 @@ export function normalizeSpell(raw) {
     range: raw.range || '60 feet',
     duration: raw.duration || 'Instantaneous',
     desc: Array.isArray(raw.desc) ? raw.desc.join('\n') : (raw.desc || raw.description || ''),
-    damageDice: slotDmg,
-    isHeal: /heal|cure|restore|hit points/i.test(raw.name)
+    damageDice: rawDmg,
+    isUtility: !rawDmg && !isHeal,
+    isHeal,
+    classes: classList
   };
 }
 
@@ -125,11 +133,6 @@ export function getSpell(name) {
 
 export function getAllSpells() {
   return Array.from(spellRegistry.values());
-}
-
-export function getEquipment(name) {
-  if (!name) return null;
-  return equipmentRegistry.get(name.trim().toLowerCase()) || null;
 }
 
 export function getRandomSrdLoot() {
