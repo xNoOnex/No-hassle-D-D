@@ -21,6 +21,11 @@ export const SKILLS_5E = [
 
 const ALL_SKILL_IDS = SKILLS_5E.map(s => s.id);
 
+export const XP_THRESHOLDS = [
+  0, 300, 900, 2700, 6500, 14000, 23000, 34000, 48000, 64000,
+  85000, 100000, 120000, 140000, 165000, 195000, 225000, 265000, 305000, 355000
+];
+
 export const RACES = [
   { name: 'Human', bonuses: { str: 1, dex: 1, con: 1, int: 1, wis: 1, cha: 1 } },
   { name: 'Elf (High)', bonuses: { dex: 2, int: 1 } },
@@ -69,7 +74,8 @@ export const BACKGROUNDS = [
 export const CLASSES = {
   Barbarian: {
     hitDie: 12,
-    casterStat: null,
+    casterType: null,
+    armorProf: ['unarmored', 'light', 'medium', 'shields'],
     savingThrows: ['str', 'con'],
     skillPool: ['animal_handling', 'athletics', 'intimidation', 'nature', 'perception', 'survival'],
     skillCount: 2,
@@ -77,7 +83,8 @@ export const CLASSES = {
   },
   Fighter: {
     hitDie: 10,
-    casterStat: 'int',
+    casterType: 'third',
+    armorProf: ['unarmored', 'light', 'medium', 'heavy', 'shields'],
     savingThrows: ['str', 'con'],
     skillPool: ['acrobatics', 'animal_handling', 'athletics', 'history', 'insight', 'intimidation', 'perception', 'survival'],
     skillCount: 2,
@@ -85,7 +92,8 @@ export const CLASSES = {
   },
   Paladin: {
     hitDie: 10,
-    casterStat: 'cha',
+    casterType: 'half',
+    armorProf: ['unarmored', 'light', 'medium', 'heavy', 'shields'],
     savingThrows: ['wis', 'cha'],
     skillPool: ['athletics', 'insight', 'intimidation', 'medicine', 'persuasion', 'religion'],
     skillCount: 2,
@@ -93,7 +101,8 @@ export const CLASSES = {
   },
   Ranger: {
     hitDie: 10,
-    casterStat: 'wis',
+    casterType: 'half',
+    armorProf: ['unarmored', 'light', 'medium', 'shields'],
     savingThrows: ['str', 'dex'],
     skillPool: ['animal_handling', 'athletics', 'insight', 'investigation', 'nature', 'perception', 'stealth', 'survival'],
     skillCount: 3,
@@ -101,7 +110,8 @@ export const CLASSES = {
   },
   Bard: {
     hitDie: 8,
-    casterStat: 'cha',
+    casterType: 'full',
+    armorProf: ['unarmored', 'light'],
     savingThrows: ['dex', 'cha'],
     skillPool: ALL_SKILL_IDS,
     skillCount: 3,
@@ -109,7 +119,8 @@ export const CLASSES = {
   },
   Cleric: {
     hitDie: 8,
-    casterStat: 'wis',
+    casterType: 'full',
+    armorProf: ['unarmored', 'light', 'medium', 'shields'],
     savingThrows: ['wis', 'cha'],
     skillPool: ['history', 'insight', 'medicine', 'persuasion', 'religion'],
     skillCount: 2,
@@ -117,7 +128,8 @@ export const CLASSES = {
   },
   Druid: {
     hitDie: 8,
-    casterStat: 'wis',
+    casterType: 'full',
+    armorProf: ['unarmored', 'light', 'medium', 'shields'],
     savingThrows: ['int', 'wis'],
     skillPool: ['arcana', 'animal_handling', 'insight', 'medicine', 'nature', 'perception', 'religion', 'survival'],
     skillCount: 2,
@@ -126,7 +138,8 @@ export const CLASSES = {
   ,
   Monk: {
     hitDie: 8,
-    casterStat: 'wis',
+    casterType: null,
+    armorProf: ['unarmored'],
     savingThrows: ['str', 'dex'],
     skillPool: ['acrobatics', 'athletics', 'history', 'insight', 'religion', 'stealth'],
     skillCount: 2,
@@ -134,7 +147,8 @@ export const CLASSES = {
   },
   Rogue: {
     hitDie: 8,
-    casterStat: 'int',
+    casterType: 'third',
+    armorProf: ['unarmored', 'light'],
     savingThrows: ['dex', 'int'],
     skillPool: ['acrobatics', 'athletics', 'deception', 'insight', 'intimidation', 'investigation', 'perception', 'performance', 'persuasion', 'sleight_of_hand', 'stealth'],
     skillCount: 4,
@@ -142,7 +156,8 @@ export const CLASSES = {
   },
   Warlock: {
     hitDie: 8,
-    casterStat: 'cha',
+    casterType: 'pact',
+    armorProf: ['unarmored', 'light'],
     savingThrows: ['wis', 'cha'],
     skillPool: ['arcana', 'deception', 'history', 'intimidation', 'investigation', 'nature', 'religion'],
     skillCount: 2,
@@ -150,7 +165,8 @@ export const CLASSES = {
   },
   Sorcerer: {
     hitDie: 6,
-    casterStat: 'cha',
+    casterType: 'full',
+    armorProf: ['unarmored'],
     savingThrows: ['con', 'cha'],
     skillPool: ['arcana', 'deception', 'insight', 'intimidation', 'persuasion', 'religion'],
     skillCount: 2,
@@ -158,7 +174,8 @@ export const CLASSES = {
   },
   Wizard: {
     hitDie: 6,
-    casterStat: 'int',
+    casterType: 'full',
+    armorProf: ['unarmored'],
     savingThrows: ['int', 'wis'],
     skillPool: ['arcana', 'history', 'insight', 'investigation', 'medicine', 'religion'],
     skillCount: 2,
@@ -166,7 +183,8 @@ export const CLASSES = {
   },
   Artificer: {
     hitDie: 8,
-    casterStat: 'int',
+    casterType: 'half',
+    armorProf: ['unarmored', 'light', 'medium', 'shields'],
     savingThrows: ['con', 'int'],
     skillPool: ['arcana', 'history', 'investigation', 'medicine', 'nature', 'perception', 'sleight_of_hand'],
     skillCount: 2,
@@ -174,7 +192,8 @@ export const CLASSES = {
   },
   BloodHunter: {
     hitDie: 10,
-    casterStat: 'int',
+    casterType: 'third',
+    armorProf: ['unarmored', 'light', 'medium', 'shields'],
     savingThrows: ['dex', 'int'],
     skillPool: ['acrobatics', 'arcana', 'athletics', 'history', 'insight', 'investigation', 'religion', 'survival'],
     skillCount: 3,
@@ -191,7 +210,6 @@ export const CLASS_HIT_DICE = Object.fromEntries(
 );
 
 export const WEAPONS_LIST = [
-  // Simple Melee
   { name: 'Club', damageDice: '1d4', stat: 'str', category: 'Simple Melee' },
   { name: 'Dagger', damageDice: '1d4', stat: 'dex', finesse: true, category: 'Simple Melee' },
   { name: 'Greatclub', damageDice: '1d8', stat: 'str', category: 'Simple Melee' },
@@ -202,12 +220,10 @@ export const WEAPONS_LIST = [
   { name: 'Quarterstaff', damageDice: '1d6', stat: 'str', versatile: '1d8', category: 'Simple Melee' },
   { name: 'Sickle', damageDice: '1d4', stat: 'str', category: 'Simple Melee' },
   { name: 'Spear', damageDice: '1d6', stat: 'str', versatile: '1d8', category: 'Simple Melee' },
-  // Simple Ranged
   { name: 'Light Crossbow', damageDice: '1d8', stat: 'dex', ranged: true, category: 'Simple Ranged' },
   { name: 'Dart', damageDice: '1d4', stat: 'dex', finesse: true, ranged: true, category: 'Simple Ranged' },
   { name: 'Shortbow', damageDice: '1d6', stat: 'dex', ranged: true, category: 'Simple Ranged' },
   { name: 'Sling', damageDice: '1d4', stat: 'dex', ranged: true, category: 'Simple Ranged' },
-  // Martial Melee
   { name: 'Battleaxe', damageDice: '1d8', stat: 'str', versatile: '1d10', category: 'Martial Melee' },
   { name: 'Flail', damageDice: '1d8', stat: 'str', category: 'Martial Melee' },
   { name: 'Glaive', damageDice: '1d10', stat: 'str', heavy: true, category: 'Martial Melee' },
@@ -226,25 +242,25 @@ export const WEAPONS_LIST = [
   { name: 'War Pick', damageDice: '1d8', stat: 'str', category: 'Martial Melee' },
   { name: 'Warhammer', damageDice: '1d8', stat: 'str', versatile: '1d10', category: 'Martial Melee' },
   { name: 'Whip', damageDice: '1d4', stat: 'dex', finesse: true, category: 'Martial Melee' },
-  // Martial Ranged
   { name: 'Blowgun', damageDice: '1d1', stat: 'dex', ranged: true, category: 'Martial Ranged' },
   { name: 'Hand Crossbow', damageDice: '1d6', stat: 'dex', ranged: true, category: 'Martial Ranged' },
   { name: 'Heavy Crossbow', damageDice: '1d10', stat: 'dex', heavy: true, ranged: true, category: 'Martial Ranged' },
   { name: 'Longbow', damageDice: '1d8', stat: 'dex', heavy: true, ranged: true, category: 'Martial Ranged' }
 ];
 
+// starter: true = legal Level 1 starting equipment; starter: false = must be looted/bought in-game
 export const ARMOR_LIST = [
-  { name: 'Unarmored', base: 10, type: 'unarmored' },
-  { name: 'Padded Armor', base: 11, type: 'light' },
-  { name: 'Leather Armor', base: 11, type: 'light' },
-  { name: 'Studded Leather', base: 12, type: 'light' },
-  { name: 'Hide Armor', base: 12, type: 'medium' },
-  { name: 'Chain Shirt', base: 13, type: 'medium' },
-  { name: 'Scale Mail', base: 14, type: 'medium' },
-  { name: 'Breastplate', base: 14, type: 'medium' },
-  { name: 'Half Plate', base: 15, type: 'medium' },
-  { name: 'Ring Mail', base: 14, type: 'heavy' },
-  { name: 'Chain Mail', base: 16, type: 'heavy' },
-  { name: 'Splint Armor', base: 17, type: 'heavy' },
-  { name: 'Plate Armor', base: 18, type: 'heavy' }
+  { name: 'Unarmored', base: 10, type: 'unarmored', starter: true },
+  { name: 'Padded Armor', base: 11, type: 'light', starter: true },
+  { name: 'Leather Armor', base: 11, type: 'light', starter: true },
+  { name: 'Studded Leather', base: 12, type: 'light', starter: false },
+  { name: 'Hide Armor', base: 12, type: 'medium', starter: true },
+  { name: 'Chain Shirt', base: 13, type: 'medium', starter: true },
+  { name: 'Scale Mail', base: 14, type: 'medium', starter: true },
+  { name: 'Breastplate', base: 14, type: 'medium', starter: false },
+  { name: 'Half Plate', base: 15, type: 'medium', starter: false },
+  { name: 'Ring Mail', base: 14, type: 'heavy', starter: true },
+  { name: 'Chain Mail', base: 16, type: 'heavy', starter: true },
+  { name: 'Splint Armor', base: 17, type: 'heavy', starter: false },
+  { name: 'Plate Armor', base: 18, type: 'heavy', starter: false }
 ];

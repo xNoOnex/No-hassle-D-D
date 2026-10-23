@@ -9,8 +9,14 @@ import {
   saveCharacter,
   deleteCharacter
 } from './utils/storage';
-import { getApiKey, setApiKey, getSelectedModel, setSelectedModel } from './utils/aiConfig';
-import { generateNarrativeTurn } from './utils/aiEngine';
+import {
+  UNCENSORED_MODELS,
+  getApiKey,
+  setApiKey,
+  getSelectedModel,
+  setSelectedModel
+} from './utils/aiConfig';
+import { generateCampaignIntro, generateNarrativeTurn } from './utils/aiEngine';
 import {
   calculateMod,
   calculateAC,
@@ -18,38 +24,33 @@ import {
   rollStat4d6DropLowest,
   buildInitiativeQueue,
   executeAutomatedMonsterTurn,
-  rollD100LootTable
+  rollD100LootTable,
+  awardXpAndCheckLevelUp,
+  equipItemToHero,
+  getMaxSpellSlots,
+  rollPhysical
 } from './utils/dndEngine';
 import { RACES, BACKGROUNDS, CLASSES, SUBCLASSES, WEAPONS_LIST, ARMOR_LIST, SKILLS_5E } from './data/rules5e.js';
 import { getMonster } from './data/index';
 import PlayerScreen from './components/PlayerScreen';
 
 const generateRoomCode = () => Math.random().toString(36).substring(2, 6).toUpperCase();
+const ROLL_COUNTS_KEY = 'dnd_forge_roll_counts';
+const ROLL_STATS_KEY = 'dnd_forge_rolled_stats';
 
 const normalizeGameState = (raw = {}, fallbackName = 'Campaign') => ({
   campaignName: raw.campaignName || fallbackName,
-  currentModule: raw.currentModule || 'The Stolen Core of Oakhaven',
   combatActive: Boolean(raw.combatActive),
   party: Array.isArray(raw.party) ? raw.party : Object.values(raw.party || {}),
   activeMonsters: Array.isArray(raw.activeMonsters) ? raw.activeMonsters : [],
   turnQueue: Array.isArray(raw.turnQueue) ? raw.turnQueue : [],
   currentTurnIndex: typeof raw.currentTurnIndex === 'number' ? raw.currentTurnIndex : 0,
+  explorationTurnIndex: typeof raw.explorationTurnIndex === 'number' ? raw.explorationTurnIndex : 0,
   round: typeof raw.round === 'number' ? raw.round : 1,
-  storyLog: Array.isArray(raw.storyLog) && raw.storyLog.length > 0
-    ? raw.storyLog
-    : [
-        {
-          id: 'init_1',
-          timestamp: Date.now(),
-          actor: 'Director',
-          text: 'You sit in the dimly lit parlor of Madame Elara. The town power crystal was stolen last night, and your party has been summoned.',
-          mechanicalSummary: 'Session Initialized.',
-          diceTrays: []
-        }
-      ],
+  storyLog: Array.isArray(raw.storyLog) ? raw.storyLog : [],
   journal: Array.isArray(raw.journal)
     ? raw.journal
-    : (typeof raw.journal === 'string' && raw.journal.trim() ? [raw.journal.trim()] : ['[Quest] Recover the Stolen Core of Oakhaven.']),
+    : (typeof raw.journal === 'string' && raw.journal.trim() ? [raw.journal.trim()] : []),
   lootPool: Array.isArray(raw.lootPool) ? raw.lootPool : []
 });
 
@@ -71,6 +72,9 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState(getApiKey());
   const [modelInput, setModelInput] = useState(getSelectedModel());
+  const [customModelMode, setCustomModelMode] = useState(
+    !UNCENSORED_MODELS.some(m => m.id === getSelectedModel())
+  );
   const [isProcessingAi, setIsProcessingAi] = useState(false);
 
   const [charName, setCharName] = useState('');
@@ -83,7 +87,24 @@ export default function App() {
   const [charSub2, setCharSub2] = useState('');
   const [charLvl2, setCharLvl2] = useState(0);
 
-  const [charStats, setCharStats] = useState({ str: 15, dex: 13, con: 14, int: 10, wis: 12, cha: 10 });
+  const [charStats, setCharStats] = useState(() => {
+    try {
+      const saved = localStorage.getItem(ROLL_STATS_KEY);
+      return saved ? JSON.parse(saved) : { str: 14, dex: 13, con: 14, int: 10, wis: 12, cha: 10 };
+    } catch (e) {
+      return { str: 14, dex: 13, con: 14, int: 10, wis: 12, cha: 10 };
+    }
+  });
+
+  const [statRollCounts, setStatRollCounts] = useState(() => {
+    try {
+      const saved = localStorage.getItem(ROLL_COUNTS_KEY);
+      return saved ? JSON.parse(saved) : { str: 0, dex: 0, con: 0, int: 0, wis: 0, cha: 0 };
+    } catch (e) {
+      return { str: 0, dex: 0, con: 0, int: 0, wis: 0, cha: 0 };
+    }
+  });
+
   const [statRollLogs, setStatRollLogs] = useState({});
   const [charWeaponName, setCharWeaponName] = useState('Longsword');
   const [charArmorName, setCharArmorName] = useState('Leather Armor');
@@ -113,40 +134,63 @@ export default function App() {
     const party = activeSession.gameState?.party || [];
     const remoteSelf = party.find(p => p.id === activeCharRef.current.id);
     if (remoteSelf) {
-      const updatedChar = {
-        ...activeCharRef.current,
-        hpCurrent: remoteSelf.hpCurrent ?? activeCharRef.current.hpCurrent,
-        hpMax: remoteSelf.hpMax ?? activeCharRef.current.hpMax,
-        gold: remoteSelf.gold ?? activeCharRef.current.gold,
-        inventory: remoteSelf.inventory || activeCharRef.current.inventory
-      };
+      const updatedChar = { ...activeCharRef.current, ...remoteSelf };
       setActiveCharacter(updatedChar);
       setCharacters(saveCharacter(updatedChar));
     }
   }, [activeSession?.gameState?.party]);
 
+  // Keep selected armor & shield legal when switching Primary Class
   useEffect(() => {
     const bg = BACKGROUNDS.find(b => b.name === charBackground) || BACKGROUNDS[0];
     setCharProficiencies([...bg.lockedSkills]);
+
+    const allowedTypes = CLASSES[charClass1]?.armorProf || ['unarmored'];
+    const legalArmors = ARMOR_LIST.filter(a => a.starter && allowedTypes.includes(a.type));
+    if (!legalArmors.some(a => a.name === charArmorName)) {
+      setCharArmorName(legalArmors[legalArmors.length - 1]?.name || 'Unarmored');
+    }
+    if (!allowedTypes.includes('shields')) {
+      setCharShield(false);
+    }
   }, [charBackground, charClass1, charClass2]);
 
+  // Enforces strict 3-roll limit per ability score
   const handleRollSingleStat = (statKey) => {
+    const currentCount = statRollCounts[statKey] || 0;
+    if (currentCount >= 3) return;
+
     const res = rollStat4d6DropLowest();
-    setCharStats(prev => ({ ...prev, [statKey]: res.sum }));
+    const nextStats = { ...charStats, [statKey]: res.sum };
+    const nextCounts = { ...statRollCounts, [statKey]: currentCount + 1 };
+
+    setCharStats(nextStats);
+    setStatRollCounts(nextCounts);
     setStatRollLogs(prev => ({ ...prev, [statKey]: res }));
+    localStorage.setItem(ROLL_STATS_KEY, JSON.stringify(nextStats));
+    localStorage.setItem(ROLL_COUNTS_KEY, JSON.stringify(nextCounts));
   };
 
   const handleRollAllStats = () => {
     const keys = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
-    const newStats = {};
-    const newLogs = {};
+    const nextStats = { ...charStats };
+    const nextCounts = { ...statRollCounts };
+    const nextLogs = { ...statRollLogs };
+
     keys.forEach(k => {
-      const res = rollStat4d6DropLowest();
-      newStats[k] = res.sum;
-      newLogs[k] = res;
+      if ((nextCounts[k] || 0) < 3) {
+        const res = rollStat4d6DropLowest();
+        nextStats[k] = res.sum;
+        nextCounts[k] = (nextCounts[k] || 0) + 1;
+        nextLogs[k] = res;
+      }
     });
-    setCharStats(newStats);
-    setStatRollLogs(newLogs);
+
+    setCharStats(nextStats);
+    setStatRollCounts(nextCounts);
+    setStatRollLogs(nextLogs);
+    localStorage.setItem(ROLL_STATS_KEY, JSON.stringify(nextStats));
+    localStorage.setItem(ROLL_COUNTS_KEY, JSON.stringify(nextCounts));
   };
 
   const handleCreateCharacter = (e) => {
@@ -172,13 +216,19 @@ export default function App() {
     const dexMod = calculateMod(finalStats.dex);
     const wisMod = calculateMod(finalStats.wis);
 
-    const selectedArmor = ARMOR_LIST.find(a => a.name === charArmorName) || ARMOR_LIST[2];
+    const allowedTypes = CLASSES[charClass1]?.armorProf || ['unarmored'];
+    const legalArmors = ARMOR_LIST.filter(a => a.starter && allowedTypes.includes(a.type));
+    const selectedArmor = legalArmors.find(a => a.name === charArmorName) || legalArmors[0] || ARMOR_LIST[0];
     const selectedWeapon = WEAPONS_LIST.find(w => w.name === charWeaponName) || WEAPONS_LIST[0];
+    const canShield = allowedTypes.includes('shields') && charShield;
     const classString = hasSecondary ? `${charClass1} ${pLvl} / ${charClass2} ${sLvl}` : `${charClass1} ${pLvl}`;
 
     const maxHp = calculateMulticlassMaxHP(conMod, charClass1, pLvl, hasSecondary ? charClass2 : 'None', sLvl);
-    const acVal = calculateAC(selectedArmor, dexMod, charShield, conMod, wisMod, classString);
+    const acVal = calculateAC(selectedArmor, dexMod, canShield, conMod, wisMod, classString);
     const savingThrows = CLASSES[charClass1]?.savingThrows || ['str', 'con'];
+
+    const tempHero = { primaryClass: charClass1, secondaryClass: hasSecondary ? charClass2 : 'None', level: totalLevel };
+    const maxSlots = getMaxSpellSlots(tempHero);
 
     const newChar = {
       id: `char_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
@@ -193,16 +243,19 @@ export default function App() {
       secondarySubclass: hasSecondary ? (charSub2 || (SUBCLASSES[charClass2]?.[0] ?? '')) : '',
       secondaryLevel: sLvl,
       level: totalLevel,
+      xp: 0,
       baseStats: finalStats,
       savingThrows,
       armor: selectedArmor,
-      hasShield: charShield,
+      hasShield: canShield,
       weapon: selectedWeapon,
       proficiencies: [...charProficiencies],
       hpCurrent: maxHp,
       hpMax: maxHp,
       ac: acVal,
-      inventory: ['Adventurer Pack', selectedWeapon.name, selectedArmor.name, ...(charShield ? ['Shield'] : [])],
+      spellSlotsCurrent: maxSlots,
+      spellSlotsMax: maxSlots,
+      inventory: ['Adventurer Pack', selectedWeapon.name, selectedArmor.name, ...(canShield ? ['Shield'] : [])],
       gold: 25,
       lockedRoomId: null,
       lockedCampaignName: null
@@ -212,6 +265,15 @@ export default function App() {
     setCharacters(nextChars);
     setSelectedCharId(newChar.id);
     setCharName('');
+
+    // Reset 3-roll lock counters for the next character build
+    const freshCounts = { str: 0, dex: 0, con: 0, int: 0, wis: 0, cha: 0 };
+    const freshStats = { str: 14, dex: 13, con: 14, int: 10, wis: 12, cha: 10 };
+    setStatRollCounts(freshCounts);
+    setCharStats(freshStats);
+    setStatRollLogs({});
+    localStorage.setItem(ROLL_COUNTS_KEY, JSON.stringify(freshCounts));
+    localStorage.setItem(ROLL_STATS_KEY, JSON.stringify(freshStats));
     setHomeTab('lobby');
   };
 
@@ -230,7 +292,6 @@ export default function App() {
     setCharacters(getCharacters());
   };
 
-  // Helper: Automatically run all consecutive monster turns in the initiative queue
   const runConsecutiveMonsterTurns = (state, combinedTrays, extraSummaries) => {
     if (!state.combatActive || !state.turnQueue?.length || !state.activeMonsters?.length) return;
 
@@ -248,7 +309,7 @@ export default function App() {
         const mobTurn = executeAutomatedMonsterTurn(liveMob, state.party);
         state.party = mobTurn.updatedParty;
         if (mobTurn.diceTrays?.length) combinedTrays.push(...mobTurn.diceTrays);
-        extraSummaries.push(`[Round ${state.round} - ${liveMob.name}] ${mobTurn.actionSummary}`);
+        extraSummaries.push(`[Round ${state.round} — ${liveMob.name}'s Turn] ${mobTurn.actionSummary}`);
         state.journal = [...state.journal, `[Combat Rd ${state.round}] ${mobTurn.actionSummary}`];
       }
 
@@ -265,6 +326,7 @@ export default function App() {
     const state = { ...normalizeGameState(currentGameState) };
     const {
       actionType,
+      actorId,
       actorName,
       summary,
       character,
@@ -272,6 +334,9 @@ export default function App() {
       updatedMonsters,
       newJournalEntry,
       newLootItem,
+      equipItem,
+      lootIndex,
+      rollFailed = false,
       diceTrays = [],
       skipAi
     } = actionPayload;
@@ -284,19 +349,68 @@ export default function App() {
       return state;
     }
 
+    // Equip item from Loot Pool or Hero Inventory and recalculate Hero AC/Weapon immediately
+    if (actionType === 'EQUIP_ITEM' && equipItem) {
+      state.party = state.party.map(p => (p.id === actorId ? equipItemToHero(p, equipItem) : p));
+      if (typeof lootIndex === 'number' && state.lootPool[lootIndex]) {
+        state.lootPool = state.lootPool.filter((_, idx) => idx !== lootIndex);
+      }
+      const itemName = typeof equipItem === 'string' ? equipItem : equipItem.name;
+      state.journal = [...state.journal, `[Equipped] ${actorName} equipped ${itemName}.`];
+      return state;
+    }
+
+    // Short Rest (Rolls Hit Die + CON to heal) or Long Rest (Full HP & Spell Slots)
+    if (actionType === 'REST') {
+      const isLong = actionPayload.restType === 'long';
+      const restTrays = [];
+      state.party = state.party.map(p => {
+        if (isLong) {
+          return { ...p, hpCurrent: p.hpMax, spellSlotsCurrent: p.spellSlotsMax || 0 };
+        }
+        const hd = CLASSES[p.primaryClass]?.hitDie || 8;
+        const conMod = calculateMod(p.baseStats?.con ?? 12);
+        const healRoll = rollPhysical(hd, 1, conMod, `${p.name} Short Rest Hit Die`);
+        const gained = Math.max(1, healRoll.total);
+        restTrays.push({ ...healRoll, outcome: `+${gained} HP`, isSuccess: true });
+        return { ...p, hpCurrent: Math.min(p.hpMax, (p.hpCurrent || 0) + gained) };
+      });
+      const restMsg = isLong
+        ? 'The party takes a Long Rest (Full HP and Spell Slots restored).'
+        : 'The party takes a Short Rest and spends Hit Dice to patch wounds.';
+      state.journal = [...state.journal, `[Rest] ${restMsg}`];
+      state.storyLog = [
+        ...state.storyLog,
+        {
+          id: `log_${Date.now()}`,
+          timestamp: Date.now(),
+          actor: 'Director',
+          text: restMsg,
+          mechanicalSummary: restMsg,
+          diceTrays: restTrays
+        }
+      ];
+      return state;
+    }
+
     const combinedTrays = [...diceTrays];
     const extraSummaries = [];
     const wasInCombat = state.combatActive && state.activeMonsters.length > 0;
 
     if (Array.isArray(updatedParty)) state.party = updatedParty;
 
-    if (Array.isArray(updatedMonsters)) {
-      const slain = updatedMonsters.filter(m => (m.hpCurrent ?? m.hp ?? 0) <= 0);
-      slain.forEach(s => {
-        state.journal = [...state.journal, `[Slain] ${s.name} was defeated by ${actorName || 'the party'}.`];
-      });
+    // Award XP for successful rolls (25 XP) and slain monsters (100 XP each)
+    let xpEarned = (!rollFailed && !skipAi) ? 25 : 0;
 
-      state.activeMonsters = updatedMonsters.filter(m => (m.hpCurrent ?? m.hp ?? 0) > 0);
+    if (Array.isArray(updatedMonsters)) {
+      const prevCount = state.activeMonsters.length;
+      const remaining = updatedMonsters.filter(m => (m.hpCurrent ?? m.hp ?? 0) > 0);
+      const killedCount = Math.max(0, prevCount - remaining.length);
+      if (killedCount > 0) {
+        xpEarned += killedCount * 100;
+      }
+
+      state.activeMonsters = remaining;
       const aliveIds = new Set(state.activeMonsters.map(m => m.instanceId || m.id));
       state.turnQueue = (state.turnQueue || []).filter(u => u.type === 'player' || aliveIds.has(u.id));
 
@@ -309,39 +423,50 @@ export default function App() {
         state.lootPool = [...state.lootPool, lootDrop.item];
         const goldPerHero = Math.max(1, Math.floor(lootDrop.gold / Math.max(1, state.party.length)));
         state.party = state.party.map(p => ({ ...p, gold: (p.gold || 0) + goldPerHero }));
-        const victoryMsg = `Combat Victory! Rolled d100 Loot: Found ${lootDrop.item.name} and ${lootDrop.gold} Gold (+${goldPerHero} GP each).`;
+        const victoryMsg = `Combat Victory! Rolled d100 Loot: ${lootDrop.item.name} + ${lootDrop.gold} GP (+${goldPerHero} GP each).`;
         extraSummaries.push(victoryMsg);
         state.journal = [...state.journal, `[Victory & Loot] ${victoryMsg}`];
+      }
+    }
+
+    if (xpEarned > 0) {
+      const lvlCheck = awardXpAndCheckLevelUp(state.party, xpEarned);
+      state.party = lvlCheck.updatedParty;
+      if (lvlCheck.levelUpTrays.length) combinedTrays.push(...lvlCheck.levelUpTrays);
+      if (lvlCheck.levelUpLogs.length) {
+        extraSummaries.push(...lvlCheck.levelUpLogs);
+        lvlCheck.levelUpLogs.forEach(l => state.journal.push(`[Level Up] ${l}`));
       }
     }
 
     if (newJournalEntry) state.journal = [...state.journal, newJournalEntry];
     if (newLootItem) state.lootPool = [...state.lootPool, newLootItem];
 
-    // Auto-record player action in the campaign journal
     if (summary && !skipAi) {
-      state.journal = [...state.journal, `[Action] ${summary}`];
+      state.journal = [...state.journal, `[Turn] ${summary}`];
     }
 
-    // If combat is ongoing after a player's turn, advance turn queue and auto-run any monster turns
-    if (state.combatActive && state.activeMonsters.length > 0 && state.turnQueue.length > 0 && !skipAi) {
-      let nextIdx = (state.currentTurnIndex || 0) + 1;
-      if (nextIdx >= state.turnQueue.length) {
-        nextIdx = 0;
-        state.round = (state.round || 1) + 1;
+    // Advance turn order (Combat Initiative Queue OR Exploration Party Rotation)
+    if (!skipAi) {
+      if (state.combatActive && state.activeMonsters.length > 0 && state.turnQueue.length > 0) {
+        let nextIdx = (state.currentTurnIndex || 0) + 1;
+        if (nextIdx >= state.turnQueue.length) {
+          nextIdx = 0;
+          state.round = (state.round || 1) + 1;
+        }
+        state.currentTurnIndex = nextIdx;
+        runConsecutiveMonsterTurns(state, combinedTrays, extraSummaries);
+      } else if (state.party.length > 0) {
+        state.explorationTurnIndex = ((state.explorationTurnIndex || 0) + 1) % state.party.length;
       }
-      state.currentTurnIndex = nextIdx;
-      runConsecutiveMonsterTurns(state, combinedTrays, extraSummaries);
     }
 
-    if (skipAi) {
-      return state;
-    }
+    if (skipAi) return state;
 
     const fullMechanicalSummary = [summary, ...extraSummaries].filter(Boolean).join(' | ');
     setIsProcessingAi(true);
     try {
-      const recentHistory = state.storyLog.slice(-6).map(entry => ({
+      const recentHistory = state.storyLog.slice(-5).map(entry => ({
         role: entry.actor === 'Director' ? 'assistant' : 'user',
         content: entry.mechanicalSummary ? `[${entry.mechanicalSummary}] ${entry.text}` : entry.text
       }));
@@ -349,10 +474,10 @@ export default function App() {
       const aiRes = await generateNarrativeTurn({
         gameState: state,
         resolvedAction: fullMechanicalSummary,
+        rollFailed,
         recentHistory
       });
 
-      // If AI spawned monsters from the 5e Bestiary, auto-roll initiative and start combat
       if (aiRes.spawnedMonsters?.length) {
         const newlySpawned = [];
         aiRes.spawnedMonsters.forEach(req => {
@@ -385,30 +510,31 @@ export default function App() {
         combinedTrays.push(...initRes.initiativeTrays);
 
         const orderStr = initRes.queue.map(u => `${u.name} (${u.initiative})`).join(' -> ');
-        state.journal = [
-          ...state.journal,
-          `[Encounter Started] ${newlySpawned.map(m => m.name).join(', ')} appeared! Initiative: ${orderStr}`
-        ];
+        extraSummaries.push(`⚔️ AMBUSH! Initiative Order: ${orderStr}`);
+        state.journal = [...state.journal, `[Combat Started] Initiative: ${orderStr}`];
 
-        // If monsters won initiative at index 0, auto-execute their opening turns immediately
         runConsecutiveMonsterTurns(state, combinedTrays, extraSummaries);
       }
 
       if (aiRes.journalEntries?.length) {
         state.journal = [...state.journal, ...aiRes.journalEntries.map(j => `[Story Note] ${j}`)];
-      } else if (aiRes.narration) {
-        const shortSnippet = aiRes.narration.split('.')[0] + '.';
-        state.journal = [...state.journal, `[Story] ${shortSnippet}`];
       }
 
       if (aiRes.lootItems?.length) {
         state.lootPool = [...state.lootPool, ...aiRes.lootItems];
         aiRes.lootItems.forEach(item => {
-          state.journal = [...state.journal, `[Loot Gained] ${item.name} x${item.qty}`];
+          state.journal = [...state.journal, `[Loot Discovered] ${item.name} x${item.qty}`];
         });
       }
 
-      const finalSummaryText = [summary, ...extraSummaries].filter(Boolean).join('\n');
+      // Announce whose turn is next
+      const nextTurnActor = state.combatActive && state.turnQueue.length > 0
+        ? state.turnQueue[state.currentTurnIndex || 0]?.name
+        : state.party[state.explorationTurnIndex || 0]?.name || actorName;
+
+      if (nextTurnActor) {
+        extraSummaries.push(`👉 NEXT TURN: ${nextTurnActor}`);
+      }
 
       state.storyLog = [
         ...state.storyLog,
@@ -417,7 +543,7 @@ export default function App() {
           timestamp: Date.now(),
           actor: 'Director',
           text: aiRes.narration,
-          mechanicalSummary: finalSummaryText,
+          mechanicalSummary: [summary, ...extraSummaries].filter(Boolean).join('\n'),
           diceTrays: combinedTrays
         }
       ];
@@ -513,9 +639,9 @@ export default function App() {
     return lockedChar;
   };
 
-  const startHostSession = (existingSession = null) => {
+  const startHostSession = async (existingSession = null) => {
     setLobbyError('');
-    const campaignTitle = existingSession ? existingSession.name : (newCampaignName.trim() || 'New Campaign');
+    const campaignTitle = existingSession ? existingSession.name : (newCampaignName.trim() || 'Untitled Odyssey');
     const roomId = existingSession?.roomId || existingSession?.roomCode || generateRoomCode();
 
     const charForRoom = resolveCharacterForRoom(roomId, campaignTitle, Boolean(existingSession));
@@ -530,6 +656,20 @@ export default function App() {
     const existsInParty = baseState.party.some(p => p.id === charForRoom.id);
     if (!existsInParty) {
       baseState.party = [...baseState.party, charForRoom];
+    }
+
+    const isBrandNewStory = !existingSession || baseState.storyLog.length === 0;
+    if (isBrandNewStory) {
+      baseState.storyLog = [
+        {
+          id: `init_${Date.now()}`,
+          timestamp: Date.now(),
+          actor: 'Director',
+          text: `Forging a brand-new adventure for "${campaignTitle}"...`,
+          mechanicalSummary: `👉 CURRENT TURN: ${charForRoom.name}`,
+          diceTrays: []
+        }
+      ];
     }
 
     const sessionObj = {
@@ -549,6 +689,52 @@ export default function App() {
     setActiveCharacter(charForRoom);
     setActiveSession(sessionObj);
     saveSession(sessionObj);
+
+    // Dynamically generate a unique campaign story & quest hook for every new room
+    if (isBrandNewStory) {
+      setIsProcessingAi(true);
+      try {
+        const intro = await generateCampaignIntro({
+          campaignName: campaignTitle,
+          party: baseState.party
+        });
+        const readyState = {
+          ...baseState,
+          storyLog: [
+            {
+              id: `intro_${Date.now()}`,
+              timestamp: Date.now(),
+              actor: 'Director',
+              text: intro.narration,
+              mechanicalSummary: `Adventure Started | 👉 NEXT TURN: ${charForRoom.name}`,
+              diceTrays: []
+            }
+          ],
+          journal: [`[Campaign Quest] ${intro.quest}`]
+        };
+        const updatedSession = { ...sessionObj, gameState: readyState, lastPlayed: Date.now() };
+        setActiveSession(updatedSession);
+        saveSession(updatedSession);
+        if (networkRef.current) networkRef.current.broadcastState(readyState);
+      } catch (err) {
+        const fallbackState = {
+          ...baseState,
+          storyLog: [
+            {
+              id: `intro_err_${Date.now()}`,
+              timestamp: Date.now(),
+              actor: 'System',
+              text: `[Could not generate opening scene: ${err.message}. Check your OpenRouter API key in Settings.]`,
+              mechanicalSummary: `👉 NEXT TURN: ${charForRoom.name}`,
+              diceTrays: []
+            }
+          ]
+        };
+        setActiveSession({ ...sessionObj, gameState: fallbackState });
+      } finally {
+        setIsProcessingAi(false);
+      }
+    }
   };
 
   const startClientJoin = () => {
@@ -623,6 +809,10 @@ export default function App() {
 
   const unlockedCharacters = characters.filter(c => !c.lockedRoomId);
   const currentClassData = CLASSES[charClass1] || CLASSES['Fighter'];
+  const allowedArmorTypes = currentClassData.armorProf || ['unarmored'];
+  const starterArmorOptions = ARMOR_LIST.filter(a => a.starter && allowedArmorTypes.includes(a.type));
+  const canClassUseShield = allowedArmorTypes.includes('shields');
+
   const secondaryMulticlassBonus = ['Bard', 'Ranger', 'Rogue'].includes(charClass2) ? 1 : 0;
   const maxClassSkills = currentClassData.skillCount + secondaryMulticlassBonus;
   const currentBgData = BACKGROUNDS.find(b => b.name === charBackground) || BACKGROUNDS[0];
@@ -634,6 +824,7 @@ export default function App() {
   const selectableSkillPool = combinedSkillPool.filter(s => !lockedBgSkills.includes(s));
   const chosenCustomSkills = charProficiencies.filter(s => !lockedBgSkills.includes(s));
   const currentRaceObj = RACES.find(r => r.name === charRace) || RACES[0];
+  const allStatsLocked = Object.values(statRollCounts).every(c => c >= 3);
 
   return (
     <div style={{ minHeight: '100vh', background: '#090d16', color: '#f8fafc', display: 'flex', flexDirection: 'column', fontFamily: 'sans-serif' }}>
@@ -745,15 +936,15 @@ export default function App() {
                 <div style={{ padding: '20px', background: '#0f172a', borderRadius: '12px', border: '1px solid rgba(99, 102, 241, 0.3)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#818cf8' }}>
                     <Shield style={{ width: '20px', height: '20px' }} />
-                    <h2 style={{ fontSize: '15px', fontWeight: 'bold', margin: 0 }}>Host a Campaign (AI Director + Host Player)</h2>
+                    <h2 style={{ fontSize: '15px', fontWeight: 'bold', margin: 0 }}>Host a New Campaign (AI Generates Unique World)</h2>
                   </div>
                   <p style={{ fontSize: '13px', color: '#94a3b8', margin: 0 }}>
-                    Locks your selected hero to this campaign, generates a 4-letter room code, and runs the OpenRouter AI Director.
+                    Locks your selected hero to this world and calls the AI Director to generate a brand-new opening story and quest hook.
                   </p>
                   <div style={{ display: 'flex', gap: '8px' }}>
                     <input
                       type="text"
-                      placeholder="NEW CAMPAIGN NAME"
+                      placeholder="NEW CAMPAIGN TITLE (e.g. Ashes of Ironhold)"
                       value={newCampaignName}
                       onChange={e => setNewCampaignName(e.target.value)}
                       style={{ flex: 1, background: '#020617', border: '1px solid #334155', borderRadius: '8px', padding: '10px 14px', fontSize: '14px', color: '#fff' }}
@@ -772,9 +963,6 @@ export default function App() {
                     <Users style={{ width: '20px', height: '20px' }} />
                     <h2 style={{ fontSize: '15px', fontWeight: 'bold', margin: 0 }}>Join a Game (Client Player)</h2>
                   </div>
-                  <p style={{ fontSize: '13px', color: '#94a3b8', margin: 0 }}>
-                    Verifies the Host room is live before joining. Automatically loads your locked hero if returning to a room.
-                  </p>
                   <div style={{ display: 'flex', gap: '8px' }}>
                     <input
                       type="text"
@@ -811,7 +999,7 @@ export default function App() {
                                 {s.name} {code ? <span style={{ fontSize: '11px', color: '#64748b', fontFamily: 'monospace' }}>[{code}]</span> : null}
                               </div>
                               <div style={{ fontSize: '11px', color: '#94a3b8' }}>
-                                {lockedHero ? `Locked Hero: ${lockedHero.name} (${lockedHero.class})` : 'No hero locked yet'} • {new Date(s.lastPlayed).toLocaleDateString()}
+                                {lockedHero ? `Locked Hero: ${lockedHero.name} (Lvl ${lockedHero.level} ${lockedHero.class})` : 'No hero locked yet'} • {new Date(s.lastPlayed).toLocaleDateString()}
                               </div>
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -841,7 +1029,7 @@ export default function App() {
                 <form onSubmit={handleCreateCharacter} style={{ padding: '20px', background: '#0f172a', borderRadius: '12px', border: '1px solid #334155', display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#818cf8', fontWeight: 'bold', fontSize: '15px' }}>
                     <UserPlus style={{ width: '18px', height: '18px' }} />
-                    <span>Forge New 5e Hero (Complete SRD Rules & Dual-Tree)</span>
+                    <span>Forge New 5e Hero (3-Roll Stat Cap & Starter Gear Enforced)</span>
                   </div>
 
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
@@ -971,17 +1159,28 @@ export default function App() {
                     </div>
                   </div>
 
+                  {/* 4d6 Stat Roller with Strict 3-Roll Lock per Stat */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <label style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 'bold' }}>
-                        Initial Ability Scores (Roll 4d6 Drop Lowest + Racial Bonus)
+                        Initial Ability Scores (Max 3 Rolls Per Stat — Locks After 3rd Roll)
                       </label>
                       <button
                         type="button"
+                        disabled={allStatsLocked}
                         onClick={handleRollAllStats}
-                        style={{ padding: '6px 12px', background: '#4f46e5', color: '#fff', fontSize: '11px', fontWeight: 'bold', borderRadius: '6px', border: 'none', cursor: 'pointer' }}
+                        style={{
+                          padding: '6px 12px',
+                          background: allStatsLocked ? '#1e293b' : '#4f46e5',
+                          color: allStatsLocked ? '#64748b' : '#fff',
+                          fontSize: '11px',
+                          fontWeight: 'bold',
+                          borderRadius: '6px',
+                          border: 'none',
+                          cursor: allStatsLocked ? 'not-allowed' : 'pointer'
+                        }}
                       >
-                        🎲 Roll All 6 Stats (4d6)
+                        {allStatsLocked ? '🔒 All Stats Locked' : '🎲 Roll All Unlocked (4d6)'}
                       </button>
                     </div>
 
@@ -991,16 +1190,30 @@ export default function App() {
                         const totalVal = val + raceBonus;
                         const mod = calculateMod(totalVal);
                         const log = statRollLogs[stat];
+                        const usedRolls = statRollCounts[stat] || 0;
+                        const rollsLeft = Math.max(0, 3 - usedRolls);
+                        const isLocked = rollsLeft === 0;
+
                         return (
-                          <div key={stat} style={{ background: '#020617', border: '1px solid #334155', borderRadius: '8px', padding: '10px', display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'center' }}>
+                          <div key={stat} style={{ background: '#020617', border: isLocked ? '1px solid #451a03' : '1px solid #334155', borderRadius: '8px', padding: '10px', display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'center' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
                               <span style={{ fontSize: '11px', fontWeight: 'bold', textTransform: 'uppercase', color: '#818cf8' }}>{stat}</span>
                               <button
                                 type="button"
+                                disabled={isLocked}
                                 onClick={() => handleRollSingleStat(stat)}
-                                style={{ padding: '3px 7px', background: '#1e1b4b', border: '1px solid #4f46e5', color: '#c7d2fe', fontSize: '10px', fontWeight: 'bold', borderRadius: '4px', cursor: 'pointer' }}
+                                style={{
+                                  padding: '3px 6px',
+                                  background: isLocked ? '#1e293b' : '#1e1b4b',
+                                  border: isLocked ? '1px solid #334155' : '1px solid #4f46e5',
+                                  color: isLocked ? '#64748b' : '#c7d2fe',
+                                  fontSize: '9px',
+                                  fontWeight: 'bold',
+                                  borderRadius: '4px',
+                                  cursor: isLocked ? 'not-allowed' : 'pointer'
+                                }}
                               >
-                                🎲 4d6
+                                {isLocked ? '🔒 Locked' : `🎲 (${rollsLeft} left)`}
                               </button>
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -1013,7 +1226,7 @@ export default function App() {
                               Base {val} {raceBonus > 0 ? `+ ${raceBonus} Race` : ''}
                             </div>
                             {log && (
-                              <div style={{ fontSize: '10px', color: '#fcd34d', fontFamily: 'monospace' }}>
+                              <div style={{ fontSize: '9px', color: '#fcd34d', fontFamily: 'monospace' }}>
                                 [{log.rawRolls.join(', ')}] drop {log.dropped}
                               </div>
                             )}
@@ -1023,9 +1236,10 @@ export default function App() {
                     </div>
                   </div>
 
+                  {/* Starter Equipment (Filtered by Class Proficiency & Starter Tier) */}
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '8px', alignItems: 'end' }}>
                     <div>
-                      <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>5e Weapon ({WEAPONS_LIST.length} Options)</label>
+                      <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Starting Weapon</label>
                       <select
                         value={charWeaponName}
                         onChange={e => setCharWeaponName(e.target.value)}
@@ -1039,23 +1253,27 @@ export default function App() {
                       </select>
                     </div>
                     <div>
-                      <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>5e Armor ({ARMOR_LIST.length} Options)</label>
+                      <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>
+                        Starting Armor ({charClass1} Allowed)
+                      </label>
                       <select
                         value={charArmorName}
                         onChange={e => setCharArmorName(e.target.value)}
                         style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '10px', color: '#fff', fontSize: '12px' }}
                       >
-                        {ARMOR_LIST.map(a => (
+                        {starterArmorOptions.map(a => (
                           <option key={a.name} value={a.name}>
                             {a.name} (AC {a.base} • {a.type})
                           </option>
                         ))}
                       </select>
                     </div>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px', background: '#020617', border: '1px solid #334155', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', height: '38px', boxSizing: 'border-box' }}>
-                      <input type="checkbox" checked={charShield} onChange={e => setCharShield(e.target.checked)} />
-                      <span>Shield (+2)</span>
-                    </label>
+                    {canClassUseShield && (
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px', background: '#020617', border: '1px solid #334155', borderRadius: '6px', fontSize: '12px', cursor: 'pointer', height: '38px', boxSizing: 'border-box' }}>
+                        <input type="checkbox" checked={charShield} onChange={e => setCharShield(e.target.checked)} />
+                        <span>Shield (+2)</span>
+                      </label>
+                    )}
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px', background: '#020617', borderRadius: '8px', border: '1px solid #1e293b' }}>
@@ -1064,7 +1282,7 @@ export default function App() {
                         Pick Class Skills ({chosenCustomSkills.length} / {maxClassSkills} Selected)
                       </span>
                       <span style={{ fontSize: '10px', color: '#34d399' }}>
-                        Locked Saves: {(currentClassData.savingThrows || []).map(s => s.toUpperCase()).join(', ')} | Locked Background: {lockedBgSkills.map(s => s.replace(/_/g, ' ')).join(', ')}
+                        Locked Saves: {(currentClassData.savingThrows || []).map(s => s.toUpperCase()).join(', ')}
                       </span>
                     </div>
 
@@ -1122,7 +1340,7 @@ export default function App() {
                     type="submit"
                     style={{ padding: '14px', background: '#4f46e5', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', fontSize: '14px', cursor: 'pointer' }}
                   >
-                    Save Hero to Vault
+                    Save Hero to Vault (Resets Stat Roll Lock for Next Hero)
                   </button>
                 </form>
 
@@ -1150,7 +1368,7 @@ export default function App() {
                             )}
                           </div>
                           <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px' }}>
-                            {c.race} • {c.class} ({c.primarySubclass}{c.secondarySubclass ? ` / ${c.secondarySubclass}` : ''}) • HP: {c.hpCurrent}/{c.hpMax} • AC: {c.ac}
+                            {c.race} • Lvl {c.level} {c.class} • HP: {c.hpCurrent}/{c.hpMax} • AC: {c.ac}
                           </div>
                         </div>
                         <button
@@ -1181,19 +1399,17 @@ export default function App() {
 
       {showSettings && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', zIndex: 100 }}>
-          <div style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '12px', maxWidth: '400px', width: '100%', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px', boxSizing: 'border-box' }}>
+          <div style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '12px', maxWidth: '420px', width: '100%', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px', boxSizing: 'border-box' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#818cf8', fontWeight: 'bold', fontSize: '15px' }}>
                 <Key style={{ width: '18px', height: '18px' }} />
-                <span>OpenRouter AI Settings</span>
+                <span>OpenRouter AI & Model Selector</span>
               </div>
               <button onClick={() => setShowSettings(false)} style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}>
                 <X style={{ width: '20px', height: '20px' }} />
               </button>
             </div>
-            <p style={{ fontSize: '12px', color: '#94a3b8', margin: 0, lineHeight: '1.4' }}>
-              Your API key is stored strictly in your phone's local storage. It is never included in git commits or sent to other players.
-            </p>
+
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <div>
                 <label style={{ fontSize: '11px', fontWeight: '600', color: '#cbd5e1', display: 'block', marginBottom: '4px' }}>OpenRouter API Key</label>
@@ -1202,20 +1418,45 @@ export default function App() {
                   placeholder="sk-or-v1-..."
                   value={apiKeyInput}
                   onChange={e => setApiKeyInput(e.target.value)}
-                  style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '8px 12px', fontSize: '13px', color: '#fff', fontFamily: 'monospace', boxSizing: 'border-box' }}
+                  style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '10px', fontSize: '13px', color: '#fff', fontFamily: 'monospace', boxSizing: 'border-box' }}
                 />
               </div>
+
               <div>
-                <label style={{ fontSize: '11px', fontWeight: '600', color: '#cbd5e1', display: 'block', marginBottom: '4px' }}>Model ID</label>
-                <input
-                  type="text"
-                  placeholder="nousresearch/hermes-3-llama-3.1-70b"
-                  value={modelInput}
-                  onChange={e => setModelInput(e.target.value)}
-                  style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '8px 12px', fontSize: '13px', color: '#fff', fontFamily: 'monospace', boxSizing: 'border-box' }}
-                />
+                <label style={{ fontSize: '11px', fontWeight: '600', color: '#cbd5e1', display: 'block', marginBottom: '4px' }}>Select Uncensored RP Model</label>
+                <select
+                  value={customModelMode ? 'CUSTOM' : modelInput}
+                  onChange={e => {
+                    if (e.target.value === 'CUSTOM') {
+                      setCustomModelMode(true);
+                    } else {
+                      setCustomModelMode(false);
+                      setModelInput(e.target.value);
+                    }
+                  }}
+                  style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '10px', fontSize: '13px', color: '#fff', boxSizing: 'border-box' }}
+                >
+                  {UNCENSORED_MODELS.map(m => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+                  <option value="CUSTOM">-- Custom OpenRouter Model ID --</option>
+                </select>
               </div>
+
+              {customModelMode && (
+                <div>
+                  <label style={{ fontSize: '11px', fontWeight: '600', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Custom Model Slug</label>
+                  <input
+                    type="text"
+                    placeholder="organization/model-name"
+                    value={modelInput}
+                    onChange={e => setModelInput(e.target.value)}
+                    style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '10px', fontSize: '13px', color: '#fff', fontFamily: 'monospace', boxSizing: 'border-box' }}
+                  />
+                </div>
+              )}
             </div>
+
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '4px' }}>
               <button
                 onClick={() => setShowSettings(false)}
@@ -1227,7 +1468,7 @@ export default function App() {
                 onClick={handleSaveSettings}
                 style={{ padding: '8px 16px', background: '#4f46e5', color: '#fff', fontSize: '13px', fontWeight: '600', borderRadius: '6px', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
               >
-                <Check style={{ width: '14px', height: '14px' }} /> Save
+                <Check style={{ width: '14px', height: '14px' }} /> Lock In Model & Key
               </button>
             </div>
           </div>

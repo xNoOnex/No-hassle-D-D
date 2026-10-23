@@ -1,4 +1,4 @@
-import { CLASSES } from '../data/rules5e.js';
+import { CLASSES, XP_THRESHOLDS, WEAPONS_LIST, ARMOR_LIST, SKILLS_5E } from '../data/rules5e.js';
 import { getRandomSrdLoot } from '../data/index.js';
 
 export const calculateMod = (score = 10) => Math.floor((Number(score) - 10) / 2);
@@ -30,12 +30,13 @@ export const calculateAC = (
 ) => {
   let base = 10 + dexMod;
   const isUnarmored = !armor || armor.type === 'unarmored' || armor.name === 'Unarmored';
+  const magicBonus = Number(armor?.magicBonus || 0);
 
   if (isUnarmored && classString.includes('Barbarian')) {
-    return 10 + dexMod + conMod + (hasShield ? 2 : 0);
+    return 10 + dexMod + conMod + (hasShield ? 2 : 0) + magicBonus;
   }
   if (isUnarmored && classString.includes('Monk')) {
-    return 10 + dexMod + wisMod + (hasShield ? 2 : 0);
+    return 10 + dexMod + wisMod + (hasShield ? 2 : 0) + magicBonus;
   }
 
   if (armor && !isUnarmored) {
@@ -43,7 +44,7 @@ export const calculateAC = (
     else if (armor.type === 'medium') base = (armor.base || 14) + Math.min(2, dexMod);
     else if (armor.type === 'heavy') base = (armor.base || 16);
   }
-  return base + (hasShield ? 2 : 0);
+  return base + (hasShield ? 2 : 0) + magicBonus;
 };
 
 export const calculateMaxHP = (conMod = 0, hitDie = 10, level = 1) => {
@@ -66,13 +67,26 @@ export const calculateMulticlassMaxHP = (
   const hd2 = CLASSES[secondaryClass]?.hitDie || 8;
 
   let totalHp = hd1 + conMod;
-  if (pLvl > 1) {
-    totalHp += (Math.floor(hd1 / 2) + 1 + conMod) * (pLvl - 1);
-  }
-  if (sLvl > 0) {
-    totalHp += (Math.floor(hd2 / 2) + 1 + conMod) * sLvl;
-  }
+  if (pLvl > 1) totalHp += (Math.floor(hd1 / 2) + 1 + conMod) * (pLvl - 1);
+  if (sLvl > 0) totalHp += (Math.floor(hd2 / 2) + 1 + conMod) * sLvl;
   return Math.max(1, totalHp);
+};
+
+// Returns highest spell level unlocked (0 = Cantrips only, 1..9 = leveled spells)
+export const getMaxUnlockedSpellLevel = (hero) => {
+  const pClass = CLASSES[hero?.primaryClass];
+  const sClass = CLASSES[hero?.secondaryClass];
+  const isCaster = pClass?.casterType || sClass?.casterType;
+  if (!isCaster) return 0;
+  const lvl = Number(hero?.level || 1);
+  return Math.min(9, Math.ceil(lvl / 2));
+};
+
+export const getMaxSpellSlots = (hero) => {
+  const maxSpellLvl = getMaxUnlockedSpellLevel(hero);
+  if (maxSpellLvl <= 0) return 0;
+  const lvl = Number(hero?.level || 1);
+  return Math.min(15, 2 + lvl * 2);
 };
 
 export const rollPhysical = (sides, count = 1, modifier = 0, label = '') => {
@@ -144,17 +158,39 @@ export const rollD20 = rollD20WithTray;
 
 export const detectSkillFromText = (text = '') => {
   const t = text.toLowerCase();
-  if (t.includes('sneak') || t.includes('hide') || t.includes('stealth') || t.includes('quiet')) return { id: 'stealth', name: 'Stealth', stat: 'dex', dc: 13 };
-  if (t.includes('climb') || t.includes('jump') || t.includes('break') || t.includes('kick') || t.includes('lift') || t.includes('grapple')) return { id: 'athletics', name: 'Athletics', stat: 'str', dc: 13 };
-  if (t.includes('persuade') || t.includes('convince') || t.includes('negotiate') || t.includes('ask')) return { id: 'persuasion', name: 'Persuasion', stat: 'cha', dc: 13 };
-  if (t.includes('lie') || t.includes('bluff') || t.includes('deceive') || t.includes('trick')) return { id: 'deception', name: 'Deception', stat: 'cha', dc: 13 };
-  if (t.includes('threaten') || t.includes('intimidate') || t.includes('scare')) return { id: 'intimidation', name: 'Intimidation', stat: 'cha', dc: 13 };
-  if (t.includes('search') || t.includes('inspect') || t.includes('examine') || t.includes('trap') || t.includes('clue')) return { id: 'investigation', name: 'Investigation', stat: 'int', dc: 12 };
-  if (t.includes('magic') || t.includes('arcane') || t.includes('rune') || t.includes('crystal')) return { id: 'arcana', name: 'Arcana', stat: 'int', dc: 13 };
-  if (t.includes('heal') || t.includes('wound') || t.includes('stabilize') || t.includes('medicine')) return { id: 'medicine', name: 'Medicine', stat: 'wis', dc: 12 };
-  if (t.includes('track') || t.includes('trail') || t.includes('forage') || t.includes('wilderness')) return { id: 'survival', name: 'Survival', stat: 'wis', dc: 12 };
-  if (t.includes('sense') || t.includes('read') || t.includes('motive')) return { id: 'insight', name: 'Insight', stat: 'wis', dc: 12 };
-  if (t.includes('lock') || t.includes('pickpocket') || t.includes('steal') || t.includes('disarm')) return { id: 'sleight_of_hand', name: 'Sleight of Hand', stat: 'dex', dc: 14 };
+  if (t.includes('need') || t.includes('give') || t.includes('ask') || t.includes('persuade') || t.includes('convince') || t.includes('negotiate') || t.includes('reward') || t.includes('offer') || t.includes('deal')) {
+    return { id: 'persuasion', name: 'Persuasion', stat: 'cha', dc: 14 };
+  }
+  if (t.includes('sneak') || t.includes('hide') || t.includes('stealth') || t.includes('quiet') || t.includes('creep')) {
+    return { id: 'stealth', name: 'Stealth', stat: 'dex', dc: 13 };
+  }
+  if (t.includes('climb') || t.includes('jump') || t.includes('break') || t.includes('kick') || t.includes('lift') || t.includes('shove') || t.includes('force')) {
+    return { id: 'athletics', name: 'Athletics', stat: 'str', dc: 13 };
+  }
+  if (t.includes('lie') || t.includes('bluff') || t.includes('deceive') || t.includes('trick') || t.includes('fake')) {
+    return { id: 'deception', name: 'Deception', stat: 'cha', dc: 14 };
+  }
+  if (t.includes('threaten') || t.includes('intimidate') || t.includes('scare') || t.includes('demand')) {
+    return { id: 'intimidation', name: 'Intimidation', stat: 'cha', dc: 14 };
+  }
+  if (t.includes('search') || t.includes('inspect') || t.includes('examine') || t.includes('trap') || t.includes('clue') || t.includes('loot')) {
+    return { id: 'investigation', name: 'Investigation', stat: 'int', dc: 12 };
+  }
+  if (t.includes('magic') || t.includes('arcane') || t.includes('rune') || t.includes('crystal') || t.includes('spell')) {
+    return { id: 'arcana', name: 'Arcana', stat: 'int', dc: 13 };
+  }
+  if (t.includes('heal') || t.includes('wound') || t.includes('stabilize') || t.includes('medicine')) {
+    return { id: 'medicine', name: 'Medicine', stat: 'wis', dc: 12 };
+  }
+  if (t.includes('track') || t.includes('trail') || t.includes('forage') || t.includes('hunt') || t.includes('forest')) {
+    return { id: 'survival', name: 'Survival', stat: 'wis', dc: 12 };
+  }
+  if (t.includes('sense') || t.includes('read') || t.includes('motive') || t.includes('trust')) {
+    return { id: 'insight', name: 'Insight', stat: 'wis', dc: 12 };
+  }
+  if (t.includes('lock') || t.includes('pickpocket') || t.includes('steal') || t.includes('disarm')) {
+    return { id: 'sleight_of_hand', name: 'Sleight of Hand', stat: 'dex', dc: 14 };
+  }
   return { id: 'perception', name: 'Perception', stat: 'wis', dc: 12 };
 };
 
@@ -272,8 +308,7 @@ export const buildInitiativeQueue = (party = [], monsters = []) => {
   party.forEach(p => {
     const dexMod = calculateMod(p.baseStats?.dex ?? p.dex ?? 10);
     const tray = rollD20WithTray(dexMod, 'normal', `${p.name} Initiative`);
-    const taggedTray = { ...tray, outcome: `INIT ${tray.total}`, isSuccess: true };
-    initiativeTrays.push(taggedTray);
+    initiativeTrays.push({ ...tray, outcome: `INIT ${tray.total}`, isSuccess: true });
     combatants.push({
       id: p.id,
       name: p.name || 'Hero',
@@ -287,8 +322,7 @@ export const buildInitiativeQueue = (party = [], monsters = []) => {
   monsters.forEach(m => {
     const dexMod = calculateMod(m.stats?.dex ?? m.dex ?? 10);
     const tray = rollD20WithTray(dexMod, 'normal', `${m.name} Initiative`);
-    const taggedTray = { ...tray, outcome: `INIT ${tray.total}`, isSuccess: true };
-    initiativeTrays.push(taggedTray);
+    initiativeTrays.push({ ...tray, outcome: `INIT ${tray.total}`, isSuccess: true });
     combatants.push({
       id: m.instanceId || m.id,
       name: m.name,
@@ -362,4 +396,99 @@ export const rollD100LootTable = () => {
       { ...goldRoll, outcome: `${goldRoll.total} GP`, isSuccess: true }
     ]
   };
+};
+
+// Awards XP and automatically levels up heroes, rolling Hit Dice + unlocking spells & skills
+export const awardXpAndCheckLevelUp = (party = [], xpGain = 50) => {
+  const levelUpLogs = [];
+  const levelUpTrays = [];
+
+  const updatedParty = party.map(hero => {
+    const currentXp = (hero.xp || 0) + xpGain;
+    let currentLvl = hero.level || 1;
+    let nextThreshold = XP_THRESHOLDS[currentLvl] || 999999;
+
+    if (currentLvl < 20 && currentXp >= nextThreshold) {
+      const newLvl = currentLvl + 1;
+      const newPrimaryLvl = (hero.primaryLevel || currentLvl) + 1;
+      const hd = CLASSES[hero.primaryClass]?.hitDie || 10;
+      const conMod = calculateMod(hero.baseStats?.con ?? 12);
+      const hpRoll = rollPhysical(hd, 1, conMod, `${hero.name} Level ${newLvl} HP`);
+      const hpGain = Math.max(1, hpRoll.total);
+      levelUpTrays.push({ ...hpRoll, outcome: `+${hpGain} Max HP`, isSuccess: true });
+
+      const newProficiencies = [...(hero.proficiencies || [])];
+      let unlockedSkillMsg = '';
+      // Unlock a new skill proficiency every 2 levels
+      if (newLvl % 2 === 0) {
+        const classPool = CLASSES[hero.primaryClass]?.skillPool || SKILLS_5E.map(s => s.id);
+        const unlearned = classPool.find(s => !newProficiencies.includes(s))
+          || SKILLS_5E.map(s => s.id).find(s => !newProficiencies.includes(s));
+        if (unlearned) {
+          newProficiencies.push(unlearned);
+          unlockedSkillMsg = ` | Unlocked Skill: ${unlearned.replace(/_/g, ' ')}`;
+        }
+      }
+
+      const classDisplay = hero.secondaryClass && hero.secondaryClass !== 'None'
+        ? `${hero.primaryClass} ${newPrimaryLvl} / ${hero.secondaryClass} ${hero.secondaryLevel || 1}`
+        : `${hero.primaryClass || 'Fighter'} ${newPrimaryLvl}`;
+
+      const updatedHero = {
+        ...hero,
+        xp: currentXp,
+        level: newLvl,
+        primaryLevel: newPrimaryLvl,
+        class: classDisplay,
+        hpMax: (hero.hpMax || 12) + hpGain,
+        hpCurrent: (hero.hpCurrent || 12) + hpGain,
+        proficiencies: newProficiencies
+      };
+      const maxSlots = getMaxSpellSlots(updatedHero);
+      updatedHero.spellSlotsMax = maxSlots;
+      updatedHero.spellSlotsCurrent = maxSlots;
+
+      levelUpLogs.push(
+        `🎉 LEVEL UP! ${hero.name} reached Level ${newLvl}! (+${hpGain} Max HP, Spell Level ${getMaxUnlockedSpellLevel(updatedHero)} Unlocked${unlockedSkillMsg})`
+      );
+      return updatedHero;
+    }
+
+    return { ...hero, xp: currentXp };
+  });
+
+  return { updatedParty, levelUpLogs, levelUpTrays };
+};
+
+// Equips an item from Loot Pool or Inventory directly onto the Hero and updates AC / Weapon stats
+export const equipItemToHero = (hero, itemObj) => {
+  const itemName = typeof itemObj === 'string' ? itemObj : (itemObj?.name || '');
+  const lower = itemName.toLowerCase();
+  const bonusMatch = itemName.match(/\+(\d+)/);
+  const magicBonus = bonusMatch ? parseInt(bonusMatch[1], 10) : (lower.includes('enchanted') ? 1 : 0);
+
+  const updated = { ...hero };
+  const inv = Array.isArray(updated.inventory) ? [...updated.inventory] : [];
+  if (!inv.includes(itemName)) inv.push(itemName);
+  updated.inventory = inv;
+
+  const matchedArmor = ARMOR_LIST.find(a => a.name !== 'Unarmored' && lower.includes(a.name.toLowerCase().replace(' armor', '')));
+  const matchedWeapon = WEAPONS_LIST.find(w => lower.includes(w.name.toLowerCase()));
+
+  if (matchedArmor || lower.includes('armor') || lower.includes('mail') || lower.includes('plate')) {
+    const baseArmor = matchedArmor || { name: itemName, base: 14, type: 'medium' };
+    updated.armor = { ...baseArmor, name: itemName, magicBonus };
+  } else if (lower.includes('shield')) {
+    updated.hasShield = true;
+  } else if (matchedWeapon || lower.includes('sword') || lower.includes('axe') || lower.includes('bow') || lower.includes('dagger') || lower.includes('spear') || lower.includes('weapon') || lower.includes('staff')) {
+    const baseWep = matchedWeapon || { name: itemName, damageDice: '1d8', stat: 'str' };
+    updated.weapon = { ...baseWep, name: itemName, magicBonus };
+  }
+
+  const dexMod = calculateMod(updated.baseStats?.dex ?? 10);
+  const conMod = calculateMod(updated.baseStats?.con ?? 10);
+  const wisMod = calculateMod(updated.baseStats?.wis ?? 10);
+  updated.ac = calculateAC(updated.armor, dexMod, updated.hasShield, conMod, wisMod, updated.class || '');
+
+  return updated;
 };
