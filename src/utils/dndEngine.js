@@ -72,21 +72,17 @@ export const calculateMulticlassMaxHP = (
   return Math.max(1, totalHp);
 };
 
-// Authentic 5e Spell Unlock Rules per Class & Subclass
 const getSingleClassMaxSpellLevel = (className, subclassName, classLevel) => {
   const lvl = Number(classLevel || 0);
   if (!className || className === 'None' || lvl <= 0) return -1;
 
-  // Full Casters + Artificer (cast at Level 1)
   if (['Bard', 'Cleric', 'Druid', 'Sorcerer', 'Warlock', 'Wizard', 'Artificer'].includes(className)) {
     return Math.min(9, Math.ceil(lvl / 2));
   }
-  // Half Casters (Ranger & Paladin unlock spells at Level 2, no cantrips)
   if (['Paladin', 'Ranger'].includes(className)) {
     if (lvl < 2) return -1;
     return Math.min(5, Math.ceil(lvl / 4));
   }
-  // Third Casters (only specific magical subclasses unlock spells at Level 3)
   if (className === 'Fighter' && subclassName === 'Eldritch Knight') {
     return lvl < 3 ? -1 : Math.min(4, Math.ceil(lvl / 6));
   }
@@ -112,7 +108,6 @@ export const getMaxSpellSlots = (hero) => {
   return Math.min(12, 1 + lvl);
 };
 
-// Filters SRD spells strictly to the hero's unlocked class spell list & spell level
 export const getUnlockedSpellsForHero = (hero, allSpells = []) => {
   const maxLvl = getMaxUnlockedSpellLevel(hero);
   if (maxLvl < 0) return [];
@@ -138,7 +133,6 @@ export const getUnlockedSpellsForHero = (hero, allSpells = []) => {
     if (tag) allowedTags.add(tag);
   }
 
-  // Paladins and Rangers do not get Level 0 Cantrips in 5e unless dual-classed with a cantrip caster
   const hasCantripClass = ['bard', 'cleric', 'druid', 'sorcerer', 'warlock', 'wizard'].some(t => allowedTags.has(t));
 
   return allSpells.filter(sp => {
@@ -232,13 +226,13 @@ export const detectSkillFromText = (text = '') => {
   if (t.includes('threaten') || t.includes('intimidate') || t.includes('scare') || t.includes('demand')) {
     return { id: 'intimidation', name: 'Intimidation', stat: 'cha', dc: 14 };
   }
-  if (t.includes('search') || t.includes('inspect') || t.includes('examine') || t.includes('trap') || t.includes('clue') || t.includes('loot')) {
+  if (t.includes('search') || t.includes('inspect') || t.includes('examine') || t.includes('trap') || t.includes('clue') || t.includes('loot') || t.includes('cauldron')) {
     return { id: 'investigation', name: 'Investigation', stat: 'int', dc: 12 };
   }
-  if (t.includes('magic') || t.includes('arcane') || t.includes('rune') || t.includes('crystal') || t.includes('spell')) {
+  if (t.includes('magic') || t.includes('arcane') || t.includes('rune') || t.includes('crystal') || t.includes('spell') || t.includes('ritual')) {
     return { id: 'arcana', name: 'Arcana', stat: 'int', dc: 13 };
   }
-  if (t.includes('heal') || t.includes('wound') || t.includes('stabilize') || t.includes('medicine')) {
+  if (t.includes('heal') || t.includes('wound') || t.includes('stabilize') || t.includes('medicine') || t.includes('child')) {
     return { id: 'medicine', name: 'Medicine', stat: 'wis', dc: 12 };
   }
   if (t.includes('track') || t.includes('trail') || t.includes('forage') || t.includes('hunt') || t.includes('forest')) {
@@ -457,7 +451,6 @@ export const rollD100LootTable = () => {
   };
 };
 
-// Authentic 5e Leveling: Activates Planned Secondary Class at Lvl 2, rolls Hit Dice, unlocks spells/skills
 export const awardXpAndCheckLevelUp = (party = [], xpGain = 10) => {
   const levelUpLogs = [];
   const levelUpTrays = [];
@@ -473,7 +466,6 @@ export const awardXpAndCheckLevelUp = (party = [], xpGain = 10) => {
       const curPrimaryLvl = hero.primaryLevel || 1;
       const curSecondaryLvl = hero.secondaryLevel || 0;
 
-      // At Level 2, if a Secondary Class was chosen, unlock Level 1 of that Secondary Class
       const levelingSecondary = hasSecondaryPlan && (curSecondaryLvl === 0 || newLvl % 2 === 0);
       const nextPrimaryLvl = levelingSecondary ? curPrimaryLvl : curPrimaryLvl + 1;
       const nextSecondaryLvl = levelingSecondary ? curSecondaryLvl + 1 : curSecondaryLvl;
@@ -488,7 +480,6 @@ export const awardXpAndCheckLevelUp = (party = [], xpGain = 10) => {
       const newProficiencies = [...(hero.proficiencies || [])];
       let unlockedSkillMsg = '';
 
-      // 5e Multiclass Rule: Unlocking Level 1 of Bard, Ranger, or Rogue grants +1 skill from their pool
       const getsMulticlassSkill = levelingSecondary && nextSecondaryLvl === 1 && ['Bard', 'Ranger', 'Rogue'].includes(hero.secondaryClass);
       if (getsMulticlassSkill || newLvl % 3 === 0) {
         const pool = CLASSES[leveledClassName]?.skillPool || SKILLS_5E.map(s => s.id);
@@ -531,9 +522,53 @@ export const awardXpAndCheckLevelUp = (party = [], xpGain = 10) => {
   return { updatedParty, levelUpLogs, levelUpTrays };
 };
 
+// Classifies an inventory/loot item so only real Weapons, Armor, and Shields show Equip
+export const getItemCategory = (itemObj) => {
+  const name = (typeof itemObj === 'string' ? itemObj : itemObj?.name || '').toLowerCase();
+  const type = (typeof itemObj === 'object' ? itemObj?.type || '' : '').toLowerCase();
+
+  if (name.includes('shield')) return 'shield';
+  if (name.includes('potion') || name.includes('elixir') || type.includes('potion')) return 'potion';
+
+  const isKnownArmor = ARMOR_LIST.some(a => a.name !== 'Unarmored' && name.includes(a.name.toLowerCase().replace(' armor', '')));
+  if (isKnownArmor || name.includes('armor') || name.includes('mail') || name.includes('plate') || name.includes('breastplate') || type.includes('armor')) {
+    return 'armor';
+  }
+
+  const isKnownWeapon = WEAPONS_LIST.some(w => name.includes(w.name.toLowerCase()));
+  if (
+    isKnownWeapon ||
+    name.includes('sword') ||
+    name.includes('axe') ||
+    name.includes('bow') ||
+    name.includes('dagger') ||
+    name.includes('spear') ||
+    name.includes('mace') ||
+    name.includes('staff') ||
+    name.includes('warhammer') ||
+    name.includes('rapier') ||
+    name.includes('blade') ||
+    type.includes('weapon')
+  ) {
+    return 'weapon';
+  }
+
+  return 'gear';
+};
+
+export const isItemEquipped = (hero, itemName) => {
+  if (!hero || !itemName) return false;
+  const clean = String(itemName).trim().toLowerCase();
+  if (clean.includes('shield')) return Boolean(hero.hasShield);
+  if (hero.weapon?.name && hero.weapon.name.trim().toLowerCase() === clean) return true;
+  if (hero.armor?.name && hero.armor.name.trim().toLowerCase() === clean) return true;
+  return false;
+};
+
 export const equipItemToHero = (hero, itemObj) => {
   const itemName = typeof itemObj === 'string' ? itemObj : (itemObj?.name || '');
   const lower = itemName.toLowerCase();
+  const category = getItemCategory(itemObj);
   const bonusMatch = itemName.match(/\+(\d+)/);
   const magicBonus = bonusMatch ? parseInt(bonusMatch[1], 10) : (lower.includes('enchanted') ? 1 : 0);
 
@@ -542,17 +577,36 @@ export const equipItemToHero = (hero, itemObj) => {
   if (!inv.includes(itemName)) inv.push(itemName);
   updated.inventory = inv;
 
-  const matchedArmor = ARMOR_LIST.find(a => a.name !== 'Unarmored' && lower.includes(a.name.toLowerCase().replace(' armor', '')));
-  const matchedWeapon = WEAPONS_LIST.find(w => lower.includes(w.name.toLowerCase()));
-
-  if (matchedArmor || lower.includes('armor') || lower.includes('mail') || lower.includes('plate')) {
+  if (category === 'armor') {
+    const matchedArmor = ARMOR_LIST.find(a => a.name !== 'Unarmored' && lower.includes(a.name.toLowerCase().replace(' armor', '')));
     const baseArmor = matchedArmor || { name: itemName, base: 14, type: 'medium' };
     updated.armor = { ...baseArmor, name: itemName, magicBonus };
-  } else if (lower.includes('shield')) {
+  } else if (category === 'shield') {
     updated.hasShield = true;
-  } else if (matchedWeapon || lower.includes('sword') || lower.includes('axe') || lower.includes('bow') || lower.includes('dagger') || lower.includes('spear') || lower.includes('weapon') || lower.includes('staff')) {
+  } else if (category === 'weapon') {
+    const matchedWeapon = WEAPONS_LIST.find(w => lower.includes(w.name.toLowerCase()));
     const baseWep = matchedWeapon || { name: itemName, damageDice: '1d8', stat: 'str' };
     updated.weapon = { ...baseWep, name: itemName, magicBonus };
+  }
+
+  const dexMod = calculateMod(updated.baseStats?.dex ?? 10);
+  const conMod = calculateMod(updated.baseStats?.con ?? 10);
+  const wisMod = calculateMod(updated.baseStats?.wis ?? 10);
+  updated.ac = calculateAC(updated.armor, dexMod, updated.hasShield, conMod, wisMod, updated.class || '');
+
+  return updated;
+};
+
+export const unequipItemFromHero = (hero, itemName) => {
+  const clean = String(itemName || '').trim().toLowerCase();
+  const updated = { ...hero };
+
+  if (clean.includes('shield')) {
+    updated.hasShield = false;
+  } else if (updated.armor?.name?.toLowerCase() === clean) {
+    updated.armor = { name: 'Unarmored', base: 10, type: 'unarmored' };
+  } else if (updated.weapon?.name?.toLowerCase() === clean) {
+    updated.weapon = { name: 'Unarmed Strike', damageDice: '1d4', stat: 'str' };
   }
 
   const dexMod = calculateMod(updated.baseStats?.dex ?? 10);

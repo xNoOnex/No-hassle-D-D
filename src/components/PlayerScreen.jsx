@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Swords, User, Backpack, BookOpen,
-  Target, RefreshCw, Dices, Users, Lock, Sparkles, Heart
+  Target, RefreshCw, Dices, Users, Lock, Sparkles, Heart, HelpCircle, X
 } from 'lucide-react';
 import {
   calculateMod,
@@ -12,15 +12,29 @@ import {
   parseAndRollDice,
   getMaxUnlockedSpellLevel,
   getMaxSpellSlots,
-  getUnlockedSpellsForHero
+  getUnlockedSpellsForHero,
+  getItemCategory,
+  isItemEquipped
 } from '../utils/dndEngine';
 import { SKILLS_5E, XP_THRESHOLDS } from '../data/rules5e.js';
 import { getAllSpells } from '../data/index';
 
+const RP_MODES = [
+  { prefix: '"', suffix: '"', label: '" " Talk', desc: 'Spoken out loud in-character to NPCs & Party' },
+  { prefix: "'", suffix: "'", label: "' ' Whisper", desc: 'Whispered quietly under your breath' },
+  { prefix: '*', suffix: '*', label: '* * Act', desc: 'Physical action or movement performed' },
+  { prefix: '(', suffix: ')', label: '( ) Think', desc: 'Surface thought (NPCs cannot hear unless telepathic)' },
+  { prefix: '((', suffix: '))', label: '(( )) Inner', desc: 'Deep internal monologue, feelings, or memories' },
+  { prefix: '[', suffix: ']', label: '[ ] Party OOC', desc: 'Out-of-character chat to party only (skips AI & dice)' },
+  { prefix: '[[', suffix: ']]', label: '[[ ]] AI DM', desc: 'Direct OOC instruction or question to the AI Director' }
+];
+
+const GENDERS = ['Male', 'Female', 'Non-Binary', 'Construct / Genderless', 'Other'];
+
 function DiceTrayView({ trays = [] }) {
   if (!trays || trays.length === 0) return null;
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '4px' }}>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '4px' }}>
       {trays.map((t, idx) => {
         const isCrit = Boolean(t.isCrit);
         const isFumble = Boolean(t.isFumble);
@@ -32,21 +46,22 @@ function DiceTrayView({ trays = [] }) {
           <div
             key={idx}
             style={{
-              padding: '8px 12px',
+              padding: '6px 10px',
               background: bgColor,
               border: `1px solid ${borderColor}`,
               borderRadius: '8px',
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '8px',
-              fontSize: '13px',
+              flexWrap: 'wrap',
+              gap: '6px',
+              fontSize: '0.8rem',
               fontFamily: 'monospace'
             }}
           >
             <span style={{ fontWeight: 'bold', color: '#818cf8' }}>
               🎲 {t.diceLabel || t.diceNotation || 'Roll'}
             </span>
-            <span style={{ color: '#f8fafc', background: '#0f172a', padding: '2px 8px', borderRadius: '4px', border: '1px solid #334155' }}>
+            <span style={{ color: '#f8fafc', background: '#0f172a', padding: '1px 6px', borderRadius: '4px', border: '1px solid #334155' }}>
               Die: [{rollsList}]
             </span>
             {t.modifier !== undefined && t.modifier !== 0 && (
@@ -54,7 +69,7 @@ function DiceTrayView({ trays = [] }) {
                 {t.modifier > 0 ? `+${t.modifier}` : t.modifier}
               </span>
             )}
-            <span style={{ fontWeight: 'bold', fontSize: '14px', color: '#fcd34d' }}>
+            <span style={{ fontWeight: 'bold', color: '#fcd34d' }}>
               = {t.total}
             </span>
             {t.targetLabel && (
@@ -62,10 +77,10 @@ function DiceTrayView({ trays = [] }) {
             )}
             {t.outcome && (
               <span style={{
-                padding: '2px 8px',
+                padding: '1px 6px',
                 borderRadius: '4px',
                 fontWeight: 'bold',
-                fontSize: '12px',
+                fontSize: '0.75rem',
                 background: t.isSuccess === false ? '#7f1d1d' : '#1e1b4b',
                 color: t.isSuccess === false ? '#fca5a5' : '#6ee7b7'
               }}>
@@ -84,12 +99,27 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
   const [selectedTargetId, setSelectedTargetId] = useState('');
   const [selectedSpellName, setSelectedSpellName] = useState('');
   const [customActionText, setCustomActionText] = useState('');
+  const [queuedCheck, setQueuedCheck] = useState(null);
+  const [showKeyTable, setShowKeyTable] = useState(false);
+
   const [playerNoteInput, setPlayerNoteInput] = useState('');
+  const [manualLootName, setManualLootName] = useState('');
+  const [manualLootType, setManualLootType] = useState('Gear');
+
+  const storyFeedRef = useRef(null);
+  const actionInputRef = useRef(null);
+
+  useEffect(() => {
+    if (activeTab === 'story' && storyFeedRef.current) {
+      storyFeedRef.current.scrollTop = storyFeedRef.current.scrollHeight;
+    }
+  }, [gameState.storyLog?.length, activeTab, isProcessingAi]);
 
   const partySelf = (gameState.party || []).find(p => p.id === activeCharacter?.id);
   const hero = partySelf ? { ...activeCharacter, ...partySelf } : (activeCharacter || {
     id: 'fallback',
     name: 'Hero',
+    gender: 'Male',
     race: 'Human',
     background: 'Soldier',
     class: 'Fighter 1',
@@ -109,7 +139,7 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
     ac: 12,
     spellSlotsCurrent: 0,
     spellSlotsMax: 0,
-    inventory: ['Longsword', 'Leather Armor'],
+    inventory: ['Potion of Healing', 'Longsword', 'Leather Armor'],
     gold: 25
   });
 
@@ -118,7 +148,6 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
   const maxSpellSlots = hero.spellSlotsMax ?? getMaxSpellSlots(hero);
   const currentSpellSlots = hero.spellSlotsCurrent ?? maxSpellSlots;
 
-  // Strictly filter spells to this hero's unlocked class list & level
   const allSpells = getAllSpells();
   const unlockedSpells = getUnlockedSpellsForHero(hero, allSpells);
 
@@ -131,36 +160,97 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
   const currentTurnName = activeCombatUnit ? activeCombatUnit.name : (activeExplorationUnit?.name || hero.name);
   const isMyTurn = currentTurnName === hero.name;
 
-  const handleSkillRoll = (skill) => {
+  // Clicking a Skill or Save queues it onto the Story input bar so you can type what you're doing first
+  const handleQueueSkillRoll = (skill) => {
     const isProf = (hero.proficiencies || []).includes(skill.id);
-    const statVal = hero.baseStats?.[skill.stat] ?? 10;
-    const check = executeCheckWithTray(statVal, isProf, profBonus, 'normal', 12, `${hero.name} ${skill.name}`);
-
-    dispatchAction({
-      actionType: 'SKILL_CHECK',
-      actorId: hero.id,
-      actorName: hero.name,
-      rollFailed: !check.isSuccess,
-      diceTrays: check.diceTrays,
-      summary: check.summary
+    const mod = calculateMod(hero.baseStats?.[skill.stat] ?? 10) + (isProf ? profBonus : 0);
+    setQueuedCheck({
+      type: 'skill',
+      id: skill.id,
+      name: skill.name,
+      stat: skill.stat,
+      isProf,
+      mod,
+      dc: 12
     });
     setActiveTab('story');
+    setTimeout(() => actionInputRef.current?.focus(), 60);
   };
 
-  const handleSaveRoll = (statKey) => {
+  const handleQueueSaveRoll = (statKey) => {
     const isProf = (hero.savingThrows || []).includes(statKey);
-    const statVal = hero.baseStats?.[statKey] ?? 10;
-    const check = executeCheckWithTray(statVal, isProf, profBonus, 'normal', 12, `${hero.name} ${statKey.toUpperCase()} Save`);
+    const mod = calculateMod(hero.baseStats?.[statKey] ?? 10) + (isProf ? profBonus : 0);
+    setQueuedCheck({
+      type: 'save',
+      id: statKey,
+      name: `${statKey.toUpperCase()} Save`,
+      stat: statKey,
+      isProf,
+      mod,
+      dc: 12
+    });
+    setActiveTab('story');
+    setTimeout(() => actionInputRef.current?.focus(), 60);
+  };
+
+  const applyRpTag = (prefix, suffix) => {
+    const trimmed = customActionText.trim();
+    if (!trimmed) {
+      setCustomActionText(`${prefix}${suffix}`);
+    } else {
+      setCustomActionText(`${prefix}${trimmed}${suffix}`);
+    }
+    setTimeout(() => actionInputRef.current?.focus(), 40);
+  };
+
+  const handleCustomAction = (e) => {
+    if (e) e.preventDefault();
+    const rawText = customActionText.trim();
+    if (!rawText && !queuedCheck) return;
+
+    // Pure [ ... ] (single brackets, not [[ ... ]]) sends Party OOC Chat without rolling or calling AI
+    if (rawText.startsWith('[') && !rawText.startsWith('[[') && rawText.endsWith(']')) {
+      dispatchAction({
+        actionType: 'OOC_CHAT',
+        actorId: hero.id,
+        actorName: hero.name,
+        summary: rawText,
+        skipAi: true
+      });
+      setCustomActionText('');
+      return;
+    }
+
+    const chosenCheck = queuedCheck || detectSkillFromText(rawText);
+    const isProf = chosenCheck.isProf !== undefined
+      ? chosenCheck.isProf
+      : (hero.proficiencies || []).includes(chosenCheck.id);
+    const statScore = hero.baseStats?.[chosenCheck.stat] ?? 10;
+
+    const check = executeCheckWithTray(
+      statScore,
+      isProf,
+      profBonus,
+      'normal',
+      chosenCheck.dc || 12,
+      `${hero.name} ${chosenCheck.name}`
+    );
+
+    const actionDescription = rawText
+      ? `${hero.name}: ${rawText} -> [${check.summary}]`
+      : `[${check.summary}]`;
 
     dispatchAction({
-      actionType: 'SAVE_CHECK',
+      actionType: 'FREEFORM_ACTION',
       actorId: hero.id,
       actorName: hero.name,
       rollFailed: !check.isSuccess,
       diceTrays: check.diceTrays,
-      summary: check.summary
+      summary: actionDescription
     });
-    setActiveTab('story');
+
+    setCustomActionText('');
+    setQueuedCheck(null);
   };
 
   const handleAttackAction = () => {
@@ -202,6 +292,7 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
       diceTrays: attackRes.diceTrays,
       summary: `${attackRes.summary}${killed ? ` ${target.name} is slain!` : ''}`
     });
+    setActiveTab('story');
   };
 
   const handleCastSpell = () => {
@@ -235,6 +326,7 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
         diceTrays: [{ ...healTray, modifier: spellMod, total: healTotal, outcome: `+${healTotal} HP`, isSuccess: true }],
         summary: `${hero.name} casts ${spell.name} and restores ${healTotal} HP!`
       });
+      setActiveTab('story');
       return;
     }
 
@@ -245,7 +337,6 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
     const monsters = gameState.activeMonsters || [];
     const target = monsters.find(m => (m.instanceId || m.id) === selectedTargetId) || monsters[0];
 
-    // Utility spells or out-of-combat casting roll a Spellcasting Check instead of fake 1d8 damage
     if (spell.isUtility || !target) {
       const spellCheck = executeCheckWithTray(10 + spellMod * 2, true, profBonus, 'normal', 12, `Cast ${spell.name}`);
       dispatchAction({
@@ -257,6 +348,7 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
         diceTrays: spellCheck.diceTrays,
         summary: `${hero.name} casts ${spell.name} (${spell.school} Utility/Effect)! ${spellCheck.summary}`
       });
+      setActiveTab('story');
       return;
     }
 
@@ -289,33 +381,7 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
       diceTrays: spellAtk.diceTrays,
       summary: `${spellAtk.summary}${killed ? ` ${target.name} is obliterated!` : ''}`
     });
-  };
-
-  const handleCustomAction = (e) => {
-    e.preventDefault();
-    if (!customActionText.trim()) return;
-
-    const detected = detectSkillFromText(customActionText);
-    const isProf = (hero.proficiencies || []).includes(detected.id);
-    const statScore = hero.baseStats?.[detected.stat] ?? 10;
-    const check = executeCheckWithTray(
-      statScore,
-      isProf,
-      profBonus,
-      'normal',
-      detected.dc,
-      `${hero.name} ${detected.name}`
-    );
-
-    dispatchAction({
-      actionType: 'FREEFORM_ACTION',
-      actorId: hero.id,
-      actorName: hero.name,
-      rollFailed: !check.isSuccess,
-      diceTrays: check.diceTrays,
-      summary: `${hero.name}: "${customActionText.trim()}" -> [${check.summary}]`
-    });
-    setCustomActionText('');
+    setActiveTab('story');
   };
 
   const handleEquipItem = (itemObj, lootIndex = null) => {
@@ -325,6 +391,69 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
       actorName: hero.name,
       equipItem: itemObj,
       lootIndex,
+      skipAi: true
+    });
+  };
+
+  const handleUnequipItem = (itemName) => {
+    dispatchAction({
+      actionType: 'UNEQUIP_ITEM',
+      actorId: hero.id,
+      actorName: hero.name,
+      equipItem: itemName,
+      skipAi: true
+    });
+  };
+
+  const handleUsePotion = (itemName) => {
+    dispatchAction({
+      actionType: 'USE_POTION',
+      actorId: hero.id,
+      actorName: hero.name,
+      equipItem: itemName,
+      skipAi: true
+    });
+  };
+
+  const handleTakeLootToBag = (lootIndex) => {
+    dispatchAction({
+      actionType: 'TAKE_PARTY_LOOT',
+      actorId: hero.id,
+      actorName: hero.name,
+      lootIndex,
+      skipAi: true
+    });
+  };
+
+  const handleSendToPartyLoot = (itemName) => {
+    dispatchAction({
+      actionType: 'SEND_TO_PARTY_LOOT',
+      actorId: hero.id,
+      actorName: hero.name,
+      equipItem: itemName,
+      skipAi: true
+    });
+  };
+
+  const handleAddManualLoot = (e) => {
+    e.preventDefault();
+    if (!manualLootName.trim()) return;
+    dispatchAction({
+      actionType: 'ADD_MANUAL_LOOT',
+      actorId: hero.id,
+      actorName: hero.name,
+      newLootItem: { name: manualLootName.trim(), qty: 1, type: manualLootType },
+      skipAi: true
+    });
+    setManualLootName('');
+  };
+
+  const handleGenderChange = (newGender) => {
+    dispatchAction({
+      actionType: 'UPDATE_GENDER',
+      actorId: hero.id,
+      actorName: hero.name,
+      newGender,
       skipAi: true
     });
   };
@@ -356,10 +485,11 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
   const nextLevelXp = XP_THRESHOLDS[hero.level || 1] || 300;
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '12px', minHeight: 0 }}>
-      {/* LIVE TURN TRACKER BANNER */}
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: '8px', overflow: 'hidden' }}>
+      {/* PINNED LIVE TURN TRACKER BANNER */}
       <div style={{
-        padding: '12px 16px',
+        flexShrink: 0,
+        padding: '8px 12px',
         borderRadius: '10px',
         background: gameState.combatActive ? '#450a0a' : (isMyTurn ? '#1e1b4b' : '#0f172a'),
         border: gameState.combatActive ? '1px solid #dc2626' : (isMyTurn ? '1px solid #6366f1' : '1px solid #334155'),
@@ -367,31 +497,31 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
         alignItems: 'center',
         justifyContent: 'space-between',
         flexWrap: 'wrap',
-        gap: '8px'
+        gap: '6px'
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
           <span style={{
-            fontSize: '12px',
+            fontSize: '0.7rem',
             fontWeight: 'bold',
-            padding: '4px 10px',
-            borderRadius: '6px',
+            padding: '3px 7px',
+            borderRadius: '5px',
             background: gameState.combatActive ? '#dc2626' : '#4f46e5',
             color: '#fff',
             textTransform: 'uppercase'
           }}>
-            {gameState.combatActive ? `⚔️ Combat Round ${gameState.round || 1}` : '🧭 Exploration Turn'}
+            {gameState.combatActive ? `⚔️ Rd ${gameState.round || 1}` : '🧭 Turn'}
           </span>
-          <span style={{ fontSize: '15px', fontWeight: 'bold', color: isMyTurn ? '#6ee7b7' : '#fcd34d' }}>
-            {isMyTurn ? `👉 IT IS YOUR TURN (${hero.name})!` : `Waiting on ${currentTurnName}'s Turn...`}
+          <span style={{ fontSize: '0.9rem', fontWeight: 'bold', color: isMyTurn ? '#6ee7b7' : '#fcd34d' }}>
+            {isMyTurn ? `👉 YOUR TURN (${hero.name})` : `Waiting: ${currentTurnName}`}
           </span>
         </div>
-        <div style={{ fontSize: '13px', color: '#cbd5e1', fontFamily: 'monospace' }}>
-          HP: {hero.hpCurrent}/{hero.hpMax} | AC: {hero.ac} | Lvl {hero.level} ({hero.xp || 0}/{nextLevelXp} XP)
+        <div style={{ fontSize: '0.78rem', color: '#cbd5e1', fontFamily: 'monospace' }}>
+          HP:{hero.hpCurrent}/{hero.hpMax} | AC:{hero.ac} | Lvl {hero.level} ({hero.xp || 0}/{nextLevelXp}XP)
         </div>
       </div>
 
-      {/* Navigation Tabs */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '6px', background: '#0f172a', padding: '6px', borderRadius: '12px', border: '1px solid #1e293b' }}>
+      {/* PINNED 5 NAVIGATION TABS (Never Scrolls Off-Screen & Never Clips) */}
+      <div style={{ flexShrink: 0, display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: '4px', background: '#0f172a', padding: '5px', borderRadius: '10px', border: '1px solid #1e293b' }}>
         {[
           { id: 'story', label: 'Story', icon: BookOpen },
           { id: 'combat', label: 'Combat', icon: Swords },
@@ -409,35 +539,52 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: '6px',
-                padding: '10px 6px',
-                fontSize: '14px',
+                gap: '4px',
+                padding: '8px 2px',
+                fontSize: '0.8rem',
                 fontWeight: 'bold',
-                borderRadius: '8px',
+                borderRadius: '7px',
                 border: 'none',
                 cursor: 'pointer',
                 background: isActive ? '#4f46e5' : 'transparent',
-                color: isActive ? '#ffffff' : '#94a3b8'
+                color: isActive ? '#ffffff' : '#94a3b8',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap'
               }}
             >
-              <Icon style={{ width: '16px', height: '16px' }} />
-              <span>{tab.label}</span>
+              <Icon style={{ width: '14px', height: '14px', flexShrink: 0 }} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{tab.label}</span>
             </button>
           );
         })}
       </div>
 
-      {/* TAB 1: STORY FEED */}
+      {/* TAB 1: INDEPENDENTLY SCROLLABLE STORY FEED + PINNED RP EXPRESSION BAR */}
       {activeTab === 'story' && (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '12px', minHeight: 0 }}>
-          <div style={{ flex: 1, background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', padding: '18px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '18px' }}>
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: '8px', overflow: 'hidden' }}>
+          <div
+            ref={storyFeedRef}
+            style={{
+              flex: 1,
+              minHeight: 0,
+              background: '#0f172a',
+              border: '1px solid #1e293b',
+              borderRadius: '12px',
+              padding: '14px',
+              overflowY: 'auto',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '14px'
+            }}
+          >
             {(gameState.storyLog || []).map(log => (
-              <div key={log.id} style={{ display: 'flex', flexDirection: 'column', gap: '8px', paddingBottom: '14px', borderBottom: '1px solid #1e293b' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div key={log.id} style={{ display: 'flex', flexDirection: 'column', gap: '6px', paddingBottom: '12px', borderBottom: '1px solid #1e293b' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
                   <span style={{
-                    fontSize: '13px',
+                    fontSize: '0.78rem',
                     fontWeight: 'bold',
-                    padding: '3px 10px',
+                    padding: '2px 8px',
                     borderRadius: '6px',
                     background: log.actor === 'Director' ? '#3b0764' : '#1e1b4b',
                     color: log.actor === 'Director' ? '#e9d5ff' : '#c7d2fe',
@@ -445,7 +592,7 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
                   }}>
                     {log.actor}
                   </span>
-                  <span style={{ fontSize: '12px', color: '#64748b', fontFamily: 'monospace' }}>
+                  <span style={{ fontSize: '0.72rem', color: '#64748b', fontFamily: 'monospace' }}>
                     {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </span>
                 </div>
@@ -453,70 +600,159 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
                 <DiceTrayView trays={log.diceTrays} />
 
                 {log.mechanicalSummary && (
-                  <div style={{ fontSize: '13px', color: '#fcd34d', fontFamily: 'monospace', background: '#020617', padding: '8px 12px', borderRadius: '6px', border: '1px solid #1e293b', whiteSpace: 'pre-wrap' }}>
+                  <div style={{ fontSize: '0.8rem', color: '#fcd34d', fontFamily: 'monospace', background: '#020617', padding: '6px 10px', borderRadius: '6px', border: '1px solid #1e293b', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                     {log.mechanicalSummary}
                   </div>
                 )}
 
-                <p style={{ fontSize: '16px', color: '#f1f5f9', lineHeight: '1.65', margin: 0, whiteSpace: 'pre-wrap' }}>
+                <p style={{ fontSize: '0.98rem', color: '#f1f5f9', lineHeight: '1.6', margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                   {log.text}
                 </p>
               </div>
             ))}
             {isProcessingAi && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#818cf8', fontSize: '14px', fontStyle: 'italic' }}>
-                <RefreshCw style={{ width: '16px', height: '16px' }} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#818cf8', fontSize: '0.88rem', fontStyle: 'italic' }}>
+                <RefreshCw style={{ width: '15px', height: '15px' }} />
                 <span>AI Director & Engine resolving turn...</span>
               </div>
             )}
           </div>
 
-          <form onSubmit={handleCustomAction} style={{ display: 'flex', gap: '8px' }}>
-            <input
-              type="text"
-              placeholder={`[${currentTurnName}'s Turn] What does ${hero.name} do?`}
-              value={customActionText}
-              onChange={e => setCustomActionText(e.target.value)}
-              style={{ flex: 1, background: '#0f172a', border: '1px solid #334155', borderRadius: '10px', padding: '14px 16px', fontSize: '15px', color: '#fff' }}
-            />
-            <button
-              type="submit"
-              disabled={isProcessingAi || !customActionText.trim()}
-              style={{ padding: '14px 22px', background: isProcessingAi || !customActionText.trim() ? '#1e293b' : '#4f46e5', color: '#fff', fontWeight: 'bold', fontSize: '15px', borderRadius: '10px', border: 'none', cursor: 'pointer' }}
-            >
-              Roll & Act
-            </button>
-          </form>
+          {/* PINNED BOTTOM RP EXPRESSION CONTROLS, QUEUED CHECK BANNER & INPUT */}
+          <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '6px', background: '#0f172a', padding: '10px', borderRadius: '12px', border: '1px solid #1e293b' }}>
+            {queuedCheck && (
+              <div style={{ padding: '6px 10px', background: '#1e1b4b', border: '1px solid #6366f1', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px' }}>
+                <span style={{ fontSize: '0.82rem', fontWeight: 'bold', color: '#c7d2fe' }}>
+                  🎲 Queued {queuedCheck.name} ({queuedCheck.mod >= 0 ? `+${queuedCheck.mod}` : queuedCheck.mod}) — Type how you use it below!
+                </span>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button
+                    type="button"
+                    onClick={() => handleCustomAction(null)}
+                    style={{ padding: '3px 8px', background: '#4f46e5', color: '#fff', border: 'none', borderRadius: '5px', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer' }}
+                  >
+                    Roll Now
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setQueuedCheck(null)}
+                    style={{ padding: '3px 6px', background: '#450a0a', color: '#fca5a5', border: '1px solid #7f1d1d', borderRadius: '5px', fontSize: '0.75rem', cursor: 'pointer' }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* RP Expression Quick-Buttons + Key Table Toggle */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', overflowX: 'auto', paddingBottom: '2px' }}>
+              {RP_MODES.map(mode => (
+                <button
+                  type="button"
+                  key={mode.label}
+                  onClick={() => applyRpTag(mode.prefix, mode.suffix)}
+                  style={{
+                    padding: '4px 8px',
+                    background: '#020617',
+                    border: '1px solid #334155',
+                    color: '#cbd5e1',
+                    borderRadius: '6px',
+                    fontSize: '0.75rem',
+                    fontWeight: 'bold',
+                    whiteSpace: 'nowrap',
+                    cursor: 'pointer'
+                  }}
+                >
+                  {mode.label}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => setShowKeyTable(prev => !prev)}
+                style={{
+                  padding: '4px 8px',
+                  background: showKeyTable ? '#4f46e5' : '#1e1b4b',
+                  border: '1px solid #6366f1',
+                  color: '#fff',
+                  borderRadius: '6px',
+                  fontSize: '0.75rem',
+                  fontWeight: 'bold',
+                  whiteSpace: 'nowrap',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '3px'
+                }}
+              >
+                <HelpCircle style={{ width: '12px', height: '12px' }} /> Key Table
+              </button>
+            </div>
+
+            {showKeyTable && (
+              <div style={{ padding: '8px 10px', background: '#020617', border: '1px solid #334155', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '0.75rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#818cf8', fontWeight: 'bold', marginBottom: '2px' }}>
+                  <span>RP Expression Key Table (Tap any button above to wrap text)</span>
+                  <button type="button" onClick={() => setShowKeyTable(false)} style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}>
+                    <X style={{ width: '14px', height: '14px' }} />
+                  </button>
+                </div>
+                {RP_MODES.map(m => (
+                  <div key={m.label} style={{ display: 'grid', gridTemplateColumns: '95px 1fr', gap: '8px', borderTop: '1px solid #0f172a', paddingTop: '3px' }}>
+                    <span style={{ fontFamily: 'monospace', fontWeight: 'bold', color: '#fcd34d' }}>{m.label}</span>
+                    <span style={{ color: '#cbd5e1' }}>{m.desc}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <form onSubmit={handleCustomAction} style={{ display: 'flex', gap: '6px' }}>
+              <input
+                ref={actionInputRef}
+                type="text"
+                placeholder={queuedCheck ? `Describe your ${queuedCheck.name} action...` : `[${currentTurnName}'s Turn] Talk, act, think, or ask AI...`}
+                value={customActionText}
+                onChange={e => setCustomActionText(e.target.value)}
+                style={{ flex: 1, minWidth: 0, background: '#020617', border: '1px solid #334155', borderRadius: '8px', padding: '10px 12px', color: '#fff' }}
+              />
+              <button
+                type="submit"
+                disabled={isProcessingAi || (!customActionText.trim() && !queuedCheck)}
+                style={{ flexShrink: 0, padding: '10px 16px', background: isProcessingAi || (!customActionText.trim() && !queuedCheck) ? '#1e293b' : '#4f46e5', color: '#fff', fontWeight: 'bold', borderRadius: '8px', border: 'none', cursor: 'pointer' }}
+              >
+                Roll & Act
+              </button>
+            </form>
+          </div>
         </div>
       )}
 
-      {/* TAB 2: AUTOMATED COMBAT & CLASS-FILTERED SPELLS */}
+      {/* TAB 2: AUTOMATED COMBAT & NON-CLIPPING SPELL BAR */}
       {activeTab === 'combat' && (
-        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          <div style={{ padding: '18px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', paddingBottom: '16px' }}>
+          <div style={{ padding: '14px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div>
-              <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: '#fb7185', margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <h3 style={{ fontSize: '1rem', fontWeight: 'bold', color: '#fb7185', margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <Swords style={{ width: '18px', height: '18px' }} />
                 <span>Automated Initiative & Turn Order</span>
               </h3>
-              <p style={{ fontSize: '14px', color: '#94a3b8', margin: '4px 0 0 0' }}>
+              <p style={{ fontSize: '0.85rem', color: '#94a3b8', margin: '4px 0 0 0' }}>
                 {gameState.combatActive && activeCombatUnit
                   ? `Round ${gameState.round || 1} — Active Turn: ${activeCombatUnit.name}`
-                  : 'No active combat. When the story triggers a fight, the AI spawns 5e SRD monsters and rolls everyone\'s initiative automatically.'}
+                  : 'No active combat. The AI spawns 5e SRD monsters and rolls initiative automatically when combat begins.'}
               </p>
             </div>
 
             {gameState.turnQueue?.length > 0 && (
-              <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '4px' }}>
+              <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', paddingBottom: '4px' }}>
                 {gameState.turnQueue.map((unit, idx) => {
                   const isCurrent = idx === (gameState.currentTurnIndex || 0);
                   return (
                     <div
                       key={`${unit.id}_${idx}`}
                       style={{
-                        padding: '8px 14px',
+                        padding: '6px 12px',
                         borderRadius: '6px',
-                        fontSize: '14px',
+                        fontSize: '0.85rem',
                         fontWeight: 'bold',
                         whiteSpace: 'nowrap',
                         background: isCurrent ? '#451a03' : '#020617',
@@ -532,19 +768,19 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
             )}
 
             {latestLogWithDice && (
-              <div style={{ padding: '12px', background: '#020617', borderRadius: '8px', border: '1px solid #1e293b' }}>
-                <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#94a3b8', textTransform: 'uppercase', marginBottom: '4px' }}>
+              <div style={{ padding: '10px', background: '#020617', borderRadius: '8px', border: '1px solid #1e293b' }}>
+                <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#94a3b8', textTransform: 'uppercase', marginBottom: '4px' }}>
                   Latest Turn Dice Rolls
                 </div>
                 <DiceTrayView trays={latestLogWithDice.diceTrays} />
               </div>
             )}
 
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', paddingTop: '8px', borderTop: '1px solid #1e293b' }}>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', paddingTop: '8px', borderTop: '1px solid #1e293b' }}>
               <select
                 value={selectedTargetId}
                 onChange={e => setSelectedTargetId(e.target.value)}
-                style={{ flex: 1, background: '#020617', border: '1px solid #334155', borderRadius: '8px', padding: '12px', fontSize: '14px', color: '#fff' }}
+                style={{ flex: '1 1 180px', minWidth: 0, background: '#020617', border: '1px solid #334155', borderRadius: '8px', padding: '10px', color: '#fff' }}
               >
                 <option value="">Target Monster...</option>
                 {(gameState.activeMonsters || []).map(m => (
@@ -556,7 +792,7 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
               <button
                 onClick={handleAttackAction}
                 disabled={isProcessingAi || !gameState.activeMonsters?.length}
-                style={{ padding: '12px 18px', background: !gameState.activeMonsters?.length ? '#1e293b' : '#e11d48', color: '#fff', fontWeight: 'bold', fontSize: '14px', borderRadius: '8px', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+                style={{ flexShrink: 0, padding: '10px 16px', background: !gameState.activeMonsters?.length ? '#1e293b' : '#e11d48', color: '#fff', fontWeight: 'bold', borderRadius: '8px', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
               >
                 <Target style={{ width: '16px', height: '16px' }} /> Attack ({hero.weapon?.name || 'Strike'})
               </button>
@@ -564,15 +800,15 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
 
             {unlockedSpells.length > 0 ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#818cf8', fontWeight: 'bold' }}>
-                  <span>{hero.primaryClass} Spells Unlocked ({unlockedSpells.length} Available)</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', fontSize: '0.82rem', color: '#818cf8', fontWeight: 'bold' }}>
+                  <span>{hero.primaryClass} Spells ({unlockedSpells.length} Unlocked)</span>
                   <span>Spell Slots: {currentSpellSlots} / {maxSpellSlots}</span>
                 </div>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
                   <select
                     value={selectedSpellName}
                     onChange={e => setSelectedSpellName(e.target.value)}
-                    style={{ flex: 1, background: '#020617', border: '1px solid #334155', borderRadius: '8px', padding: '12px', fontSize: '14px', color: '#fff' }}
+                    style={{ flex: '1 1 180px', minWidth: 0, background: '#020617', border: '1px solid #334155', borderRadius: '8px', padding: '10px', color: '#fff' }}
                   >
                     {unlockedSpells.map(sp => (
                       <option key={sp.id} value={sp.name}>
@@ -583,37 +819,37 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
                   <button
                     onClick={handleCastSpell}
                     disabled={isProcessingAi}
-                    style={{ padding: '12px 18px', background: '#4f46e5', color: '#fff', fontWeight: 'bold', fontSize: '14px', borderRadius: '8px', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+                    style={{ flexShrink: 0, padding: '10px 18px', background: '#4f46e5', color: '#fff', fontWeight: 'bold', borderRadius: '8px', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
                   >
-                    <Sparkles style={{ width: '16px', height: '16px' }} /> Cast
+                    <Sparkles style={{ width: '16px', height: '16px' }} /> Cast Spell
                   </button>
                 </div>
               </div>
             ) : (
-              <div style={{ fontSize: '13px', color: '#94a3b8', padding: '8px 12px', background: '#020617', borderRadius: '8px', border: '1px solid #1e293b' }}>
-                🔒 No Spells Unlocked Yet ({hero.class}) — Rangers & Paladins unlock Level 1 Spells at Class Level 2; Arcane Tricksters & Eldritch Knights unlock Spells at Class Level 3.
+              <div style={{ fontSize: '0.82rem', color: '#94a3b8', padding: '8px 10px', background: '#020617', borderRadius: '8px', border: '1px solid #1e293b' }}>
+                🔒 No Spells Unlocked Yet ({hero.class}) — Rangers & Paladins unlock Spells at Level 2; Arcane Tricksters & Eldritch Knights at Level 3.
               </div>
             )}
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <h3 style={{ fontSize: '13px', fontWeight: 'bold', textTransform: 'uppercase', color: '#94a3b8', margin: 0 }}>
+            <h3 style={{ fontSize: '0.82rem', fontWeight: 'bold', textTransform: 'uppercase', color: '#94a3b8', margin: 0 }}>
               Active Hostiles ({gameState.activeMonsters?.length || 0})
             </h3>
             {(!gameState.activeMonsters || gameState.activeMonsters.length === 0) ? (
-              <div style={{ padding: '18px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', textAlign: 'center', fontSize: '14px', color: '#64748b' }}>
+              <div style={{ padding: '16px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', textAlign: 'center', fontSize: '0.88rem', color: '#64748b' }}>
                 No active monsters. The AI Director spawns 5e SRD monsters automatically when combat begins.
               </div>
             ) : (
               gameState.activeMonsters.map(mob => (
-                <div key={mob.instanceId || mob.id} style={{ padding: '14px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div key={mob.instanceId || mob.id} style={{ padding: '12px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
                   <div>
-                    <div style={{ fontWeight: 'bold', fontSize: '16px', color: '#fda4af' }}>{mob.name}</div>
-                    <div style={{ fontSize: '13px', color: '#94a3b8' }}>
+                    <div style={{ fontWeight: 'bold', color: '#fda4af' }}>{mob.name}</div>
+                    <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
                       AC: {mob.ac} | CR: {mob.cr} | Attack: {mob.actions?.[0]?.name || 'Strike'} ({mob.actions?.[0]?.damageDice || '1d6'})
                     </div>
                   </div>
-                  <div style={{ fontSize: '15px', fontWeight: 'bold', color: '#e2e8f0' }}>
+                  <div style={{ fontWeight: 'bold', color: '#e2e8f0' }}>
                     HP: {mob.hpCurrent ?? mob.hp} / {mob.maxHp ?? mob.hp}
                   </div>
                 </div>
@@ -623,94 +859,133 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
         </div>
       )}
 
-      {/* TAB 3: LIVE HERO SHEET */}
+      {/* TAB 3: LIVE HERO SHEET (Gender Switcher, Working Equip/Unequip, Party Loot Transfer & Queued Checks) */}
       {activeTab === 'character' && (
-        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          <div style={{ padding: '18px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', paddingBottom: '16px' }}>
+          <div style={{ padding: '14px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
               <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <h2 style={{ fontSize: '20px', fontWeight: 'bold', margin: 0, color: '#fff' }}>{hero.name}</h2>
-                  <span style={{ fontSize: '12px', padding: '2px 8px', background: '#1e1b4b', border: '1px solid #3730a3', color: '#c7d2fe', borderRadius: '4px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                    <Lock style={{ width: '11px', height: '11px' }} /> Synced to Room
-                  </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <h2 style={{ fontSize: '1.2rem', fontWeight: 'bold', margin: 0, color: '#fff' }}>{hero.name}</h2>
+                  <select
+                    value={hero.gender || 'Male'}
+                    onChange={e => handleGenderChange(e.target.value)}
+                    style={{ background: '#020617', border: '1px solid #334155', color: '#c7d2fe', borderRadius: '6px', padding: '2px 6px', fontSize: '0.78rem' }}
+                  >
+                    {GENDERS.map(g => <option key={g} value={g}>{g}</option>)}
+                  </select>
                 </div>
-                <div style={{ fontSize: '14px', color: '#94a3b8', marginTop: '4px' }}>
+                <div style={{ fontSize: '0.85rem', color: '#94a3b8', marginTop: '4px' }}>
                   {hero.race} • {hero.background || 'Adventurer'} • {hero.class} ({hero.primarySubclass})
-                  {hero.secondaryClass && hero.secondaryClass !== 'None' && hero.secondaryLevel === 0
-                    ? ` • Dual-Tree Plan: ${hero.secondaryClass} (Unlocks at Lvl 2)`
-                    : ''}
                 </div>
               </div>
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: '15px', fontWeight: 'bold', color: '#6ee7b7' }}>Level {hero.level}</div>
-                <div style={{ fontSize: '13px', color: '#818cf8' }}>XP: {hero.xp || 0} / {nextLevelXp} (Prof +{profBonus})</div>
+                <div style={{ fontWeight: 'bold', color: '#6ee7b7' }}>Level {hero.level}</div>
+                <div style={{ fontSize: '0.8rem', color: '#818cf8' }}>XP: {hero.xp || 0} / {nextLevelXp} (Prof +{profBonus})</div>
               </div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
-              <div style={{ padding: '12px', background: '#020617', border: '1px solid #1e293b', borderRadius: '8px', textAlign: 'center' }}>
-                <div style={{ fontSize: '11px', color: '#94a3b8', textTransform: 'uppercase' }}>HP</div>
-                <div style={{ fontSize: '17px', fontWeight: 'bold', color: '#34d399', marginTop: '2px' }}>{hero.hpCurrent}/{hero.hpMax}</div>
+            {/* 2x2 Grid so GOLD and WEAPON never clip on narrow screens */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
+              <div style={{ padding: '10px', background: '#020617', border: '1px solid #1e293b', borderRadius: '8px', textAlign: 'center' }}>
+                <div style={{ fontSize: '0.72rem', color: '#94a3b8', textTransform: 'uppercase' }}>Hit Points</div>
+                <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#34d399', marginTop: '2px' }}>{hero.hpCurrent} / {hero.hpMax}</div>
               </div>
-              <div style={{ padding: '12px', background: '#020617', border: '1px solid #1e293b', borderRadius: '8px', textAlign: 'center' }}>
-                <div style={{ fontSize: '11px', color: '#94a3b8', textTransform: 'uppercase' }}>AC ({hero.armor?.name || 'Unarmored'})</div>
-                <div style={{ fontSize: '17px', fontWeight: 'bold', color: '#818cf8', marginTop: '2px' }}>{hero.ac}</div>
+              <div style={{ padding: '10px', background: '#020617', border: '1px solid #1e293b', borderRadius: '8px', textAlign: 'center' }}>
+                <div style={{ fontSize: '0.72rem', color: '#94a3b8', textTransform: 'uppercase' }}>AC ({hero.armor?.name || 'Unarmored'}{hero.hasShield ? ' + Shield' : ''})</div>
+                <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#818cf8', marginTop: '2px' }}>{hero.ac}</div>
               </div>
-              <div style={{ padding: '12px', background: '#020617', border: '1px solid #1e293b', borderRadius: '8px', textAlign: 'center' }}>
-                <div style={{ fontSize: '11px', color: '#94a3b8', textTransform: 'uppercase' }}>Weapon</div>
-                <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#f8fafc', marginTop: '4px' }}>{hero.weapon?.name} ({hero.weapon?.damageDice})</div>
+              <div style={{ padding: '10px', background: '#020617', border: '1px solid #1e293b', borderRadius: '8px', textAlign: 'center' }}>
+                <div style={{ fontSize: '0.72rem', color: '#94a3b8', textTransform: 'uppercase' }}>Equipped Weapon</div>
+                <div style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#f8fafc', marginTop: '2px' }}>{hero.weapon?.name || 'Unarmed'} ({hero.weapon?.damageDice || '1d4'})</div>
               </div>
-              <div style={{ padding: '12px', background: '#020617', border: '1px solid #1e293b', borderRadius: '8px', textAlign: 'center' }}>
-                <div style={{ fontSize: '11px', color: '#94a3b8', textTransform: 'uppercase' }}>Gold</div>
-                <div style={{ fontSize: '17px', fontWeight: 'bold', color: '#fbbf24', marginTop: '2px' }}>{hero.gold || 0} GP</div>
+              <div style={{ padding: '10px', background: '#020617', border: '1px solid #1e293b', borderRadius: '8px', textAlign: 'center' }}>
+                <div style={{ fontSize: '0.72rem', color: '#94a3b8', textTransform: 'uppercase' }}>Gold Pouch</div>
+                <div style={{ fontSize: '1.1rem', fontWeight: 'bold', color: '#fbbf24', marginTop: '2px' }}>{hero.gold || 0} GP</div>
               </div>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px', padding: '12px', background: '#020617', borderRadius: '8px', border: '1px solid #1e293b' }}>
-              <span style={{ fontSize: '13px', color: '#94a3b8' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px', padding: '10px', background: '#020617', borderRadius: '8px', border: '1px solid #1e293b' }}>
+              <span style={{ fontSize: '0.82rem', color: '#94a3b8' }}>
                 Spells Unlocked: <strong style={{ color: '#c7d2fe' }}>{unlockedSpells.length}</strong> | Slots: <strong style={{ color: '#c7d2fe' }}>{currentSpellSlots}/{maxSpellSlots}</strong>
               </span>
-              <div style={{ display: 'flex', gap: '8px' }}>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                 <button
                   onClick={() => handleRest('short')}
                   disabled={gameState.combatActive}
-                  style={{ padding: '8px 12px', background: '#064e3b', border: '1px solid #059669', color: '#6ee7b7', fontSize: '13px', fontWeight: 'bold', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  style={{ padding: '6px 10px', background: '#064e3b', border: '1px solid #059669', color: '#6ee7b7', fontSize: '0.8rem', fontWeight: 'bold', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
                 >
-                  <Heart style={{ width: '14px', height: '14px' }} /> Short Rest (Roll Hit Die)
+                  <Heart style={{ width: '13px', height: '13px' }} /> Short Rest
                 </button>
                 <button
                   onClick={() => handleRest('long')}
                   disabled={gameState.combatActive}
-                  style={{ padding: '8px 12px', background: '#1e1b4b', border: '1px solid #4f46e5', color: '#c7d2fe', fontSize: '13px', fontWeight: 'bold', borderRadius: '6px', cursor: 'pointer' }}
+                  style={{ padding: '6px 10px', background: '#1e1b4b', border: '1px solid #4f46e5', color: '#c7d2fe', fontSize: '0.8rem', fontWeight: 'bold', borderRadius: '6px', cursor: 'pointer' }}
                 >
-                  Long Rest (Full Restore)
+                  Long Rest
                 </button>
               </div>
             </div>
 
+            {/* Hero Inventory: Smart Equip / Unequip / Use Potion / Send to Party Loot */}
             <div>
-              <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#94a3b8', textTransform: 'uppercase', marginBottom: '6px' }}>
-                Hero Inventory (Tap Equip to Update AC / Weapon)
+              <div style={{ fontSize: '0.78rem', fontWeight: 'bold', color: '#94a3b8', textTransform: 'uppercase', marginBottom: '6px' }}>
+                Hero Bag ({hero.inventory?.length || 0} Items — Equip Gear or Send to Party Loot)
               </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                {(hero.inventory || []).map((item, idx) => (
-                  <div key={idx} style={{ padding: '8px 12px', background: '#020617', border: '1px solid #334155', borderRadius: '6px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span>{item}</span>
-                    <button
-                      onClick={() => handleEquipItem(item)}
-                      style={{ padding: '4px 8px', background: '#4f46e5', color: '#fff', border: 'none', borderRadius: '4px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer' }}
-                    >
-                      Equip
-                    </button>
-                  </div>
-                ))}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {(hero.inventory || []).map((item, idx) => {
+                  const cat = getItemCategory(item);
+                  const equipped = isItemEquipped(hero, item);
+                  return (
+                    <div key={`${item}_${idx}`} style={{ padding: '8px 10px', background: '#020617', border: equipped ? '1px solid #4f46e5' : '1px solid #1e293b', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ fontWeight: 'bold', color: '#f8fafc', fontSize: '0.88rem' }}>{item}</span>
+                        <span style={{ fontSize: '0.7rem', padding: '1px 6px', borderRadius: '4px', background: '#0f172a', color: '#94a3b8', textTransform: 'uppercase' }}>
+                          {cat}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        {['weapon', 'armor', 'shield'].includes(cat) && (
+                          equipped ? (
+                            <button
+                              onClick={() => handleUnequipItem(item)}
+                              style={{ padding: '4px 8px', background: '#064e3b', border: '1px solid #059669', color: '#6ee7b7', borderRadius: '5px', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer' }}
+                            >
+                              Equipped ✓ (Unequip)
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleEquipItem(item)}
+                              style={{ padding: '4px 8px', background: '#4f46e5', color: '#fff', border: 'none', borderRadius: '5px', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer' }}
+                            >
+                              Equip
+                            </button>
+                          )
+                        )}
+                        {cat === 'potion' && (
+                          <button
+                            onClick={() => handleUsePotion(item)}
+                            style={{ padding: '4px 8px', background: '#059669', color: '#fff', border: 'none', borderRadius: '5px', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer' }}
+                          >
+                            Drink (2d4+2 HP)
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleSendToPartyLoot(item)}
+                          style={{ padding: '4px 8px', background: '#1e293b', border: '1px solid #334155', color: '#fcd34d', borderRadius: '5px', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer' }}
+                        >
+                          To Party Loot
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
             <div>
-              <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#94a3b8', textTransform: 'uppercase', marginBottom: '6px' }}>
-                Ability Scores & Saving Throws (Tap to Roll Save)
+              <div style={{ fontSize: '0.78rem', fontWeight: 'bold', color: '#94a3b8', textTransform: 'uppercase', marginBottom: '6px' }}>
+                Ability Scores & Saving Throws (Tap to Queue Save Roll on Story Bar)
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
                 {Object.entries(hero.baseStats || {}).map(([stat, val]) => {
@@ -720,9 +995,9 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
                   return (
                     <button
                       key={stat}
-                      onClick={() => handleSaveRoll(stat)}
+                      onClick={() => handleQueueSaveRoll(stat)}
                       style={{
-                        padding: '12px',
+                        padding: '10px',
                         background: isSaveProf ? '#1e1b4b' : '#020617',
                         border: isSaveProf ? '1px solid #4f46e5' : '1px solid #1e293b',
                         borderRadius: '8px',
@@ -731,11 +1006,11 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
                         color: '#fff'
                       }}
                     >
-                      <div style={{ fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', color: '#94a3b8' }}>
+                      <div style={{ fontSize: '0.75rem', fontWeight: 'bold', textTransform: 'uppercase', color: '#94a3b8' }}>
                         {stat} {isSaveProf ? '★' : ''}
                       </div>
-                      <div style={{ fontSize: '18px', fontWeight: 'bold', margin: '2px 0' }}>{val}</div>
-                      <div style={{ fontSize: '12px', color: '#818cf8' }}>
+                      <div style={{ fontSize: '1.1rem', fontWeight: 'bold', margin: '2px 0' }}>{val}</div>
+                      <div style={{ fontSize: '0.75rem', color: '#818cf8' }}>
                         Mod {mod >= 0 ? `+${mod}` : mod} | Save {saveMod >= 0 ? `+${saveMod}` : saveMod}
                       </div>
                     </button>
@@ -745,9 +1020,9 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
             </div>
           </div>
 
-          <div style={{ padding: '18px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <h3 style={{ fontSize: '13px', fontWeight: 'bold', textTransform: 'uppercase', color: '#94a3b8', margin: 0 }}>
-              5e Skills (★ = Proficient — Total Proficient: {(hero.proficiencies || []).length})
+          <div style={{ padding: '14px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <h3 style={{ fontSize: '0.82rem', fontWeight: 'bold', textTransform: 'uppercase', color: '#94a3b8', margin: 0 }}>
+              5e Skills (Tap Any Skill to Queue It on the Story Input Bar)
             </h3>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
               {SKILLS_5E.map(skill => {
@@ -756,9 +1031,9 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
                 return (
                   <button
                     key={skill.id}
-                    onClick={() => handleSkillRoll(skill)}
+                    onClick={() => handleQueueSkillRoll(skill)}
                     style={{
-                      padding: '12px 14px',
+                      padding: '10px',
                       background: isProf ? '#1e1b4b' : '#020617',
                       border: isProf ? '1px solid #4f46e5' : '1px solid #1e293b',
                       borderRadius: '8px',
@@ -766,14 +1041,14 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
                       alignItems: 'center',
                       justifyContent: 'space-between',
                       color: '#f8fafc',
-                      fontSize: '14px',
+                      fontSize: '0.85rem',
                       fontWeight: '600',
                       cursor: 'pointer'
                     }}
                   >
-                    <span>{skill.name} {isProf ? '★' : ''}</span>
-                    <span style={{ color: '#818cf8', fontFamily: 'monospace', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      {mod >= 0 ? `+${mod}` : mod} <Dices style={{ width: '15px', height: '15px' }} />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{skill.name} {isProf ? '★' : ''}</span>
+                    <span style={{ color: '#818cf8', fontFamily: 'monospace', display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                      {mod >= 0 ? `+${mod}` : mod} <Dices style={{ width: '14px', height: '14px' }} />
                     </span>
                   </button>
                 );
@@ -785,26 +1060,26 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
 
       {/* TAB 4: CONNECTED PARTY */}
       {activeTab === 'party' && (
-        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <div style={{ padding: '18px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <h3 style={{ fontSize: '15px', fontWeight: 'bold', color: '#34d399', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', paddingBottom: '16px' }}>
+          <div style={{ padding: '14px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <h3 style={{ fontSize: '0.95rem', fontWeight: 'bold', color: '#34d399', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Users style={{ width: '18px', height: '18px' }} />
               <span>Connected Party ({gameState.party?.length || 0})</span>
             </h3>
             {(!gameState.party || gameState.party.length === 0) ? (
-              <p style={{ fontSize: '14px', color: '#64748b', margin: 0 }}>Waiting for party members to sync...</p>
+              <p style={{ fontSize: '0.85rem', color: '#64748b', margin: 0 }}>Waiting for party members to sync...</p>
             ) : (
               gameState.party.map(member => (
-                <div key={member.id} style={{ padding: '14px', background: '#020617', border: '1px solid #1e293b', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div key={member.id} style={{ padding: '12px', background: '#020617', border: '1px solid #1e293b', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
                   <div>
-                    <div style={{ fontWeight: 'bold', fontSize: '16px', color: '#fff' }}>
-                      {member.name} {currentTurnName === member.name ? '👉 (Active Turn)' : ''}
+                    <div style={{ fontWeight: 'bold', color: '#fff' }}>
+                      {member.name} ({member.gender || 'Hero'}) {currentTurnName === member.name ? '👉 (Active Turn)' : ''}
                     </div>
-                    <div style={{ fontSize: '13px', color: '#94a3b8' }}>
+                    <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
                       Lvl {member.level} {member.race} • {member.class} | AC: {member.ac || 12} | Gold: {member.gold || 0} GP
                     </div>
                   </div>
-                  <div style={{ fontSize: '15px', fontWeight: 'bold', color: '#34d399' }}>
+                  <div style={{ fontWeight: 'bold', color: '#34d399' }}>
                     HP: {member.hpCurrent} / {member.hpMax}
                   </div>
                 </div>
@@ -814,61 +1089,103 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
         </div>
       )}
 
-      {/* TAB 5: AUTO-JOURNAL & CLAIMABLE LOOT VAULT */}
+      {/* TAB 5: TWO-WAY PARTY LOOT VAULT & NON-CLIPPING JOURNAL */}
       {activeTab === 'journal' && (
-        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          <div style={{ padding: '18px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <h3 style={{ fontSize: '15px', fontWeight: 'bold', color: '#fbbf24', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', paddingBottom: '16px' }}>
+          <div style={{ padding: '14px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <h3 style={{ fontSize: '0.95rem', fontWeight: 'bold', color: '#fbbf24', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Backpack style={{ width: '18px', height: '18px' }} />
-              <span>Party Loot Vault (Tap Claim & Equip to Update Hero Screen)</span>
+              <span>Shared Party Loot Vault (Add or Take Items)</span>
             </h3>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+
+            {/* Add Custom Item Directly to Party Loot */}
+            <form onSubmit={handleAddManualLoot} style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+              <input
+                type="text"
+                placeholder="Add item to party loot (e.g. +1 Longsword)..."
+                value={manualLootName}
+                onChange={e => setManualLootName(e.target.value)}
+                style={{ flex: '1 1 160px', minWidth: 0, background: '#020617', border: '1px solid #334155', borderRadius: '8px', padding: '8px 10px', color: '#fff', fontSize: '0.85rem' }}
+              />
+              <select
+                value={manualLootType}
+                onChange={e => setManualLootType(e.target.value)}
+                style={{ background: '#020617', border: '1px solid #334155', borderRadius: '8px', padding: '8px', color: '#fff', fontSize: '0.85rem' }}
+              >
+                <option value="Weapon">Weapon</option>
+                <option value="Armor">Armor</option>
+                <option value="Shield">Shield</option>
+                <option value="Potion">Potion</option>
+                <option value="Gear">Gear</option>
+              </select>
+              <button
+                type="submit"
+                style={{ flexShrink: 0, padding: '8px 12px', background: '#d97706', color: '#fff', fontSize: '0.85rem', fontWeight: 'bold', borderRadius: '8px', border: 'none', cursor: 'pointer' }}
+              >
+                + Add Loot
+              </button>
+            </form>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               {(!gameState.lootPool || gameState.lootPool.length === 0) ? (
-                <p style={{ fontSize: '14px', color: '#64748b', margin: 0 }}>No unclaimed loot in the party pool.</p>
+                <p style={{ fontSize: '0.85rem', color: '#64748b', margin: 0 }}>No unclaimed loot in the party pool.</p>
               ) : (
-                gameState.lootPool.map((item, idx) => (
-                  <div key={idx} style={{ padding: '12px', background: '#020617', border: '1px solid #1e293b', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '14px' }}>
-                    <div>
-                      <span style={{ fontWeight: 'bold', color: '#f8fafc' }}>{item.name}</span>
-                      <span style={{ color: '#94a3b8', marginLeft: '8px' }}>x{item.qty} ({item.type})</span>
+                gameState.lootPool.map((item, idx) => {
+                  const cat = getItemCategory(item);
+                  return (
+                    <div key={idx} style={{ padding: '10px', background: '#020617', border: '1px solid #1e293b', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+                      <div>
+                        <span style={{ fontWeight: 'bold', color: '#f8fafc' }}>{item.name}</span>
+                        <span style={{ color: '#94a3b8', marginLeft: '6px', fontSize: '0.8rem' }}>x{item.qty || 1} ({item.type || cat})</span>
+                      </div>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <button
+                          onClick={() => handleTakeLootToBag(idx)}
+                          style={{ padding: '5px 10px', background: '#1e293b', border: '1px solid #334155', color: '#cbd5e1', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 'bold', cursor: 'pointer' }}
+                        >
+                          Take to Bag
+                        </button>
+                        {['weapon', 'armor', 'shield'].includes(cat) && (
+                          <button
+                            onClick={() => handleEquipItem(item, idx)}
+                            style={{ padding: '5px 10px', background: '#059669', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 'bold', cursor: 'pointer' }}
+                          >
+                            Take & Equip
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    <button
-                      onClick={() => handleEquipItem(item, idx)}
-                      style={{ padding: '6px 12px', background: '#059669', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer' }}
-                    >
-                      Claim & Equip
-                    </button>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>
 
-          <div style={{ padding: '18px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <h3 style={{ fontSize: '15px', fontWeight: 'bold', color: '#818cf8', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ padding: '14px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <h3 style={{ fontSize: '0.95rem', fontWeight: 'bold', color: '#818cf8', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
               <BookOpen style={{ width: '18px', height: '18px' }} />
               <span>Campaign Journal (Auto-Tracked + Manual Notes)</span>
             </h3>
 
-            <form onSubmit={handleAddJournalNote} style={{ display: 'flex', gap: '8px' }}>
+            <form onSubmit={handleAddJournalNote} style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
               <input
                 type="text"
-                placeholder="Write a manual note to add to the auto-journal..."
+                placeholder="Write a manual note..."
                 value={playerNoteInput}
                 onChange={e => setPlayerNoteInput(e.target.value)}
-                style={{ flex: 1, background: '#020617', border: '1px solid #334155', borderRadius: '8px', padding: '10px 14px', fontSize: '14px', color: '#fff' }}
+                style={{ flex: '1 1 160px', minWidth: 0, background: '#020617', border: '1px solid #334155', borderRadius: '8px', padding: '10px 12px', color: '#fff' }}
               />
               <button
                 type="submit"
-                style={{ padding: '10px 16px', background: '#4f46e5', color: '#fff', fontSize: '14px', fontWeight: 'bold', borderRadius: '8px', border: 'none', cursor: 'pointer' }}
+                style={{ flexShrink: 0, padding: '10px 14px', background: '#4f46e5', color: '#fff', fontWeight: 'bold', borderRadius: '8px', border: 'none', cursor: 'pointer' }}
               >
                 + Add Note
               </button>
             </form>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '340px', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               {[...(gameState.journal || [])].reverse().map((entry, idx) => (
-                <div key={idx} style={{ padding: '12px', background: '#020617', border: '1px solid #1e293b', borderRadius: '8px', fontSize: '14px', color: '#cbd5e1', lineHeight: '1.5' }}>
+                <div key={idx} style={{ padding: '10px', background: '#020617', border: '1px solid #1e293b', borderRadius: '8px', fontSize: '0.85rem', color: '#cbd5e1', lineHeight: '1.45', wordBreak: 'break-word' }}>
                   • {entry}
                 </div>
               ))}

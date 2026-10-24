@@ -1,12 +1,12 @@
 import { getApiKey, getSelectedModel } from './aiConfig.js';
 import { getMonstersByCR } from '../data/index.js';
 
-// Strips out training-data leaks, wiki hallucinations, and XML tags
 function cleanAiNarration(raw = '') {
   return raw
     .replace(/<journal>[\s\S]*?<\/journal>/gi, '')
     .replace(/<loot\s+[^>]*\/>/gi, '')
     .replace(/<spawn\s+[^>]*\/>/gi, '')
+    .replace(/\[(Turn Outcome|Next Turn Setup|Paragraph \d|Scene|Opening Scene)\]\s*/gi, '')
     .replace(/\[End of[\s\S]*$/i, '')
     .replace(/\[\[[\s\S]*$/i, '')
     .replace(/Create a new wiki[\s\S]*$/i, '')
@@ -25,16 +25,16 @@ export async function generateCampaignIntro({ campaignName, party = [] }) {
   }
 
   const partyDesc = party
-    .map(p => `${p.name} (Lvl ${p.level} ${p.race} ${p.class}, Background: ${p.background || 'Adventurer'})`)
+    .map(p => `${p.name} (Gender: ${p.gender || 'Unspecified'}, Lvl ${p.level} ${p.race} ${p.class}, Background: ${p.background || 'Adventurer'})`)
     .join(', ') || 'an adventurer';
 
   const prompt = `You are a master D&D 5e Dungeon Master. Write the opening scene for a brand-new dark fantasy campaign titled "${campaignName}" starring ${partyDesc}.
 Formatting Rules:
-- Write 2 vivid, atmospheric paragraphs (4 to 6 sentences total).
+- Write 2 vivid, atmospheric paragraphs (4 to 6 sentences total). Do NOT print bracket headers like [Paragraph 1] or [Opening Scene].
+- Always use the correct gender pronouns for each hero as listed above.
 - Paragraph 1: Establish the gritty setting, atmosphere, and why ${partyDesc} is here.
 - Paragraph 2: Present an immediate, concrete encounter, mystery, or NPC interaction happening right in front of them, and end by asking what they do.
-- Include exactly one <journal>Quest: ...</journal> tag at the very end.
-- Do NOT write meta-labels, wiki pages, or "[End of scene]" notes.`;
+- Include exactly one <journal>Quest: ...</journal> tag at the very end.`;
 
   const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
@@ -88,11 +88,19 @@ export async function generateNarrativeTurn({ gameState, resolvedAction, rollFai
     : `The dice roll SUCCEEDED. Narrate how the character's skill or strike pays off and advances the scene.`;
 
   const systemPrompt = `You are the automated Dungeon Master for a D&D 5e campaign ("${gameState.campaignName}").
+Player RP Notation Key:
+- "text" = Spoken out loud in-character.
+- 'text' = Whispered quietly.
+- *text* = Physical action performed by the character.
+- (text) = Surface thought (NPCs cannot hear this unless telepathic).
+- ((text)) = Deep inner monologue / internal feelings (private to the character).
+- [[text]] = Direct Out-of-Character (OOC) question or instruction to you, the AI DM.
+
 Storytelling & Continuity Rules:
-1. Write 2 cohesive, immersive paragraphs (4 to 6 sentences total) that flow directly from the previous scene.
-2. Paragraph 1: Describe the immediate physical result of the player's action and dice roll, plus any monster counter-attacks listed in the log.
-3. Paragraph 2: Advance the scene forward—show how NPCs, enemies, or the environment react, and set up the immediate situation for the next turn.
-4. NEVER write actions or dialogue for the players, NEVER output wiki articles or "[End of...]" tags.
+1. Write 2 cohesive, immersive paragraphs (4 to 6 sentences total) without printing bracket headers like "[Turn Outcome]" or "[Next Turn Setup]".
+2. Always respect each character's listed Gender/Pronouns.
+3. Paragraph 1: Describe the immediate physical result of the player's action and dice roll, plus any monster counter-attacks listed in the log.
+4. Paragraph 2: Advance the scene forward—show how NPCs, enemies, or the environment react, and set up the immediate situation for the next turn.
 5. ${failureRule}
 6. If the story triggers a new fight (and Active Hostiles is "None"), spawn monsters from the 5e SRD Bestiary using: <spawn name="Exact Monster Name" count="1" />
    Valid 5e SRD Monsters for Level ${avgLevel}: ${sampleNames || 'Goblin, Bandit, Wolf, Skeleton, Zombie, Orc, Cultist'}.
@@ -100,7 +108,7 @@ Storytelling & Continuity Rules:
 8. Only when a player genuinely finds or earns an item on a SUCCESSFUL roll, include: <loot name="Item Name" qty="1" type="Weapon|Armor|Potion|Gear" />`;
 
   const partyList = (gameState.party || [])
-    .map(p => `${p.name} (Lvl ${p.level || 1} ${p.race} ${p.class}, HP: ${p.hpCurrent}/${p.hpMax}, AC: ${p.ac})`)
+    .map(p => `${p.name} (Gender: ${p.gender || 'Unspecified'}, Lvl ${p.level || 1} ${p.race} ${p.class}, HP: ${p.hpCurrent}/${p.hpMax}, AC: ${p.ac})`)
     .join(', ') || 'Solo Adventurer';
 
   const monsterList = (gameState.activeMonsters || [])
@@ -114,7 +122,7 @@ Storytelling & Continuity Rules:
 [RECENT JOURNAL: ${(gameState.journal || []).slice(-3).join(' | ')}]
 [CURRENT TURN DICE & ACTION LOG: ${resolvedAction}]
 
-Write 2 cohesive paragraphs narrating this turn's outcome and setting up the next turn:`;
+Narrate the outcome in 2 natural paragraphs (no bracket headers):`;
 
   const messages = [
     { role: 'system', content: systemPrompt },
@@ -135,7 +143,7 @@ Write 2 cohesive paragraphs narrating this turn's outcome and setting up the nex
       messages,
       temperature: 0.75,
       max_tokens: 420,
-      stop: ['[End of', '[[', 'Create a new wiki', '<|im_end|>', '<|eot_id|>', '\n[CAMPAIGN:']
+      stop: ['[End of', 'Create a new wiki', '<|im_end|>', '<|eot_id|>', '\n[CAMPAIGN:']
     })
   });
 

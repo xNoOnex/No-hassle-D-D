@@ -1,35 +1,45 @@
 * {
   box-sizing: border-box;
+  min-width: 0;
 }
 
-html, body {
+html, body, #root {
   margin: 0;
   padding: 0;
+  width: 100%;
+  max-width: 100vw;
+  height: 100dvh;
+  overflow: hidden;
   background-color: #090d16;
   color: #f8fafc;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
-/* Auto-scale up on tablets (700px+ width) */
+.app-scale-auto {
+  font-size: 15px;
+}
+
 @media (min-width: 700px) {
   .app-scale-auto {
-    zoom: 1.25;
+    font-size: 18px;
   }
 }
 
 .app-scale-normal {
-  zoom: 1;
+  font-size: 15px;
 }
 
 .app-scale-large {
-  zoom: 1.2;
+  font-size: 17px;
 }
 
 .app-scale-xl {
-  zoom: 1.4;
+  font-size: 19px;
 }
 
-input, select, button {
+input, select, button, textarea {
   font-family: inherit;
+  font-size: inherit;
+  max-width: 100%;
 }

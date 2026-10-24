@@ -27,6 +27,8 @@ import {
   rollD100LootTable,
   awardXpAndCheckLevelUp,
   equipItemToHero,
+  unequipItemFromHero,
+  getItemCategory,
   getMaxSpellSlots,
   rollPhysical
 } from './utils/dndEngine';
@@ -38,6 +40,8 @@ const generateRoomCode = () => Math.random().toString(36).substring(2, 6).toUppe
 const ROLL_COUNTS_KEY = 'dnd_forge_roll_counts';
 const ROLL_STATS_KEY = 'dnd_forge_rolled_stats';
 const UI_SCALE_KEY = 'dnd_ui_scale';
+
+const GENDERS = ['Male', 'Female', 'Non-Binary', 'Construct / Genderless', 'Other'];
 
 const normalizeGameState = (raw = {}, fallbackName = 'Campaign') => ({
   campaignName: raw.campaignName || fallbackName,
@@ -79,8 +83,8 @@ export default function App() {
   );
   const [isProcessingAi, setIsProcessingAi] = useState(false);
 
-  // Strict Level 1 Character Creation State
   const [charName, setCharName] = useState('');
+  const [charGender, setCharGender] = useState('Male');
   const [charRace, setCharRace] = useState('Human');
   const [charBackground, setCharBackground] = useState('Soldier');
   const [charClass1, setCharClass1] = useState('Fighter');
@@ -199,7 +203,6 @@ export default function App() {
     localStorage.setItem(ROLL_COUNTS_KEY, JSON.stringify(nextCounts));
   };
 
-  // Every character starts strictly at Level 1 (0 XP). Dual-Class activates at Level 2.
   const handleCreateCharacter = (e) => {
     e.preventDefault();
     if (!charName.trim()) return;
@@ -248,6 +251,7 @@ export default function App() {
     const newChar = {
       id: `char_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
       name: charName.trim(),
+      gender: charGender,
       race: charRace,
       background: charBackground,
       class: classString,
@@ -270,7 +274,7 @@ export default function App() {
       ac: acVal,
       spellSlotsCurrent: maxSlots,
       spellSlotsMax: maxSlots,
-      inventory: ['Adventurer Pack', selectedWeapon.name, selectedArmor.name, ...(canShield ? ['Shield'] : [])],
+      inventory: ['Potion of Healing', selectedWeapon.name, selectedArmor.name, ...(canShield ? ['Shield'] : [])],
       gold: 25,
       lockedRoomId: null,
       lockedCampaignName: null
@@ -350,6 +354,7 @@ export default function App() {
       newLootItem,
       equipItem,
       lootIndex,
+      newGender,
       rollFailed = false,
       diceTrays = [],
       skipAi
@@ -363,6 +368,11 @@ export default function App() {
       return state;
     }
 
+    if (actionType === 'UPDATE_GENDER' && newGender) {
+      state.party = state.party.map(p => (p.id === actorId ? { ...p, gender: newGender } : p));
+      return state;
+    }
+
     if (actionType === 'EQUIP_ITEM' && equipItem) {
       state.party = state.party.map(p => (p.id === actorId ? equipItemToHero(p, equipItem) : p));
       if (typeof lootIndex === 'number' && state.lootPool[lootIndex]) {
@@ -370,6 +380,85 @@ export default function App() {
       }
       const itemName = typeof equipItem === 'string' ? equipItem : equipItem.name;
       state.journal = [...state.journal, `[Equipped] ${actorName} equipped ${itemName}.`];
+      return state;
+    }
+
+    if (actionType === 'UNEQUIP_ITEM' && equipItem) {
+      const itemName = typeof equipItem === 'string' ? equipItem : equipItem.name;
+      state.party = state.party.map(p => (p.id === actorId ? unequipItemFromHero(p, itemName) : p));
+      state.journal = [...state.journal, `[Unequipped] ${actorName} unequipped ${itemName}.`];
+      return state;
+    }
+
+    if (actionType === 'TAKE_PARTY_LOOT' && typeof lootIndex === 'number') {
+      const targetLoot = state.lootPool[lootIndex];
+      if (targetLoot) {
+        state.lootPool = state.lootPool.filter((_, idx) => idx !== lootIndex);
+        state.party = state.party.map(p => {
+          if (p.id !== actorId) return p;
+          const inv = Array.isArray(p.inventory) ? [...p.inventory, targetLoot.name] : [targetLoot.name];
+          return { ...p, inventory: inv };
+        });
+        state.journal = [...state.journal, `[Loot Claimed] ${actorName} took ${targetLoot.name} into their bag.`];
+      }
+      return state;
+    }
+
+    if (actionType === 'SEND_TO_PARTY_LOOT' && equipItem) {
+      const itemName = typeof equipItem === 'string' ? equipItem : equipItem.name;
+      const cat = getItemCategory(itemName);
+      state.party = state.party.map(p => {
+        if (p.id !== actorId) return p;
+        const unequipped = unequipItemFromHero(p, itemName);
+        const inv = [...(unequipped.inventory || [])];
+        const removeIdx = inv.indexOf(itemName);
+        if (removeIdx >= 0) inv.splice(removeIdx, 1);
+        return { ...unequipped, inventory: inv };
+      });
+      state.lootPool = [...state.lootPool, { name: itemName, qty: 1, type: cat.toUpperCase() }];
+      state.journal = [...state.journal, `[Party Loot] ${actorName} placed ${itemName} into the Party Loot Vault.`];
+      return state;
+    }
+
+    if (actionType === 'USE_POTION' && equipItem) {
+      const itemName = typeof equipItem === 'string' ? equipItem : equipItem.name;
+      const healRoll = rollPhysical(4, 2, 2, `${actorName} ${itemName}`);
+      const gained = Math.max(1, healRoll.total);
+      state.party = state.party.map(p => {
+        if (p.id !== actorId) return p;
+        const inv = [...(p.inventory || [])];
+        const removeIdx = inv.indexOf(itemName);
+        if (removeIdx >= 0) inv.splice(removeIdx, 1);
+        return { ...p, hpCurrent: Math.min(p.hpMax, (p.hpCurrent || 0) + gained), inventory: inv };
+      });
+      const msg = `${actorName} drank ${itemName} and recovered ${gained} HP!`;
+      state.journal = [...state.journal, `[Potion] ${msg}`];
+      state.storyLog = [
+        ...state.storyLog,
+        {
+          id: `log_${Date.now()}`,
+          timestamp: Date.now(),
+          actor: actorName,
+          text: msg,
+          mechanicalSummary: msg,
+          diceTrays: [{ ...healRoll, outcome: `+${gained} HP`, isSuccess: true }]
+        }
+      ];
+      return state;
+    }
+
+    if (actionType === 'OOC_CHAT' && summary) {
+      state.storyLog = [
+        ...state.storyLog,
+        {
+          id: `ooc_${Date.now()}`,
+          timestamp: Date.now(),
+          actor: `${actorName} (Party OOC)`,
+          text: summary,
+          mechanicalSummary: null,
+          diceTrays: []
+        }
+      ];
       return state;
     }
 
@@ -411,7 +500,6 @@ export default function App() {
 
     if (Array.isArray(updatedParty)) state.party = updatedParty;
 
-    // Authentic 5e XP pacing: 10 XP for successful skill/attack rolls, 0 XP on failure
     let xpEarned = (!rollFailed && !skipAi) ? 10 : 0;
 
     if (Array.isArray(updatedMonsters)) {
@@ -452,7 +540,10 @@ export default function App() {
     }
 
     if (newJournalEntry) state.journal = [...state.journal, newJournalEntry];
-    if (newLootItem) state.lootPool = [...state.lootPool, newLootItem];
+    if (newLootItem) {
+      state.lootPool = [...state.lootPool, newLootItem];
+      state.journal = [...state.journal, `[Party Loot Added] ${actorName || 'Party'} added ${newLootItem.name} x${newLootItem.qty}.`];
+    }
 
     if (summary && !skipAi) {
       state.journal = [...state.journal, `[Turn] ${summary}`];
@@ -822,7 +913,6 @@ export default function App() {
   const starterArmorOptions = ARMOR_LIST.filter(a => a.starter && allowedArmorTypes.includes(a.type));
   const canClassUseShield = allowedArmorTypes.includes('shields');
 
-  // Strict Level 1 skill cap: Only Primary Class skill count & pool at Level 1
   const maxClassSkills = currentClassData.skillCount;
   const currentBgData = BACKGROUNDS.find(b => b.name === charBackground) || BACKGROUNDS[0];
   const lockedBgSkills = currentBgData.lockedSkills;
@@ -833,28 +923,28 @@ export default function App() {
   const scaleClassName = `app-scale-${uiScale}`;
 
   return (
-    <div className={scaleClassName} style={{ minHeight: '100vh', background: '#090d16', color: '#f8fafc', display: 'flex', flexDirection: 'column' }}>
-      <header style={{ padding: '14px 16px', background: '#0f172a', borderBottom: '1px solid #1e293b', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-          <Shield style={{ width: '24px', height: '24px', color: '#818cf8' }} />
-          <h1 style={{ fontSize: '20px', fontWeight: 'bold', margin: 0 }}>No-Hassle D&D</h1>
+    <div className={scaleClassName} style={{ height: '100dvh', width: '100%', maxWidth: '100vw', overflow: 'hidden', background: '#090d16', color: '#f8fafc', display: 'flex', flexDirection: 'column' }}>
+      <header style={{ flexShrink: 0, padding: '10px 14px', background: '#0f172a', borderBottom: '1px solid #1e293b', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          <Shield style={{ width: '20px', height: '20px', color: '#818cf8', flexShrink: 0 }} />
+          <h1 style={{ fontSize: '1.1rem', fontWeight: 'bold', margin: 0 }}>No-Hassle D&D</h1>
           {activeSession && (
-            <span style={{ fontSize: '13px', padding: '3px 8px', borderRadius: '6px', background: '#1e1b4b', color: '#c7d2fe', border: '1px solid #3730a3', fontFamily: 'monospace' }}>
-              ROOM: {activeSession.roomId} ({activeSession.role === 'host' ? 'HOST' : 'PLAYER'})
+            <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '6px', background: '#1e1b4b', color: '#c7d2fe', border: '1px solid #3730a3', fontFamily: 'monospace' }}>
+              {activeSession.roomId} ({activeSession.role === 'host' ? 'HOST' : 'PLAYER'})
             </span>
           )}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <button
             onClick={cycleUiScale}
-            style={{ padding: '8px 10px', background: '#1e1b4b', border: '1px solid #4f46e5', color: '#c7d2fe', borderRadius: '6px', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer' }}
-            title="Tap to enlarge text size for tablets"
+            style={{ padding: '6px 10px', background: '#1e1b4b', border: '1px solid #4f46e5', color: '#c7d2fe', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 'bold', cursor: 'pointer' }}
+            title="Tap to change text scale"
           >
             A+ ({uiScale.toUpperCase()})
           </button>
           <button
             onClick={() => setShowSettings(true)}
-            style={{ padding: '8px', background: '#1e293b', border: '1px solid #334155', color: '#cbd5e1', borderRadius: '6px', cursor: 'pointer' }}
+            style={{ padding: '7px', background: '#1e293b', border: '1px solid #334155', color: '#cbd5e1', borderRadius: '6px', cursor: 'pointer' }}
             title="AI Director Settings"
           >
             <Settings style={{ width: '18px', height: '18px' }} />
@@ -862,7 +952,7 @@ export default function App() {
           {activeSession && (
             <button
               onClick={handleLeaveSession}
-              style={{ padding: '8px 12px', background: '#450a0a', border: '1px solid #7f1d1d', color: '#fca5a5', fontSize: '13px', fontWeight: '600', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+              style={{ padding: '6px 10px', background: '#450a0a', border: '1px solid #7f1d1d', color: '#fca5a5', fontSize: '0.8rem', fontWeight: '600', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
             >
               <ArrowLeft style={{ width: '14px', height: '14px' }} /> Leave
             </button>
@@ -870,18 +960,30 @@ export default function App() {
         </div>
       </header>
 
-      <main style={{ flex: 1, display: 'flex', flexDirection: 'column', maxWidth: '960px', width: '100%', margin: '0 auto', padding: '16px', boxSizing: 'border-box', overflowY: 'auto' }}>
+      <main style={{
+        flex: 1,
+        minHeight: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        maxWidth: '960px',
+        width: '100%',
+        margin: '0 auto',
+        padding: '10px 12px',
+        boxSizing: 'border-box',
+        overflowY: activeSession ? 'hidden' : 'auto',
+        overflowX: 'hidden'
+      }}>
         {!activeSession ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', paddingBottom: '24px' }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', background: '#0f172a', padding: '6px', borderRadius: '10px', border: '1px solid #1e293b' }}>
               <button
                 onClick={() => { setHomeTab('lobby'); setLobbyError(''); }}
                 style={{
-                  padding: '12px',
+                  padding: '10px',
                   borderRadius: '8px',
                   border: 'none',
                   fontWeight: 'bold',
-                  fontSize: '15px',
+                  fontSize: '0.95rem',
                   cursor: 'pointer',
                   background: homeTab === 'lobby' ? '#4f46e5' : 'transparent',
                   color: homeTab === 'lobby' ? '#fff' : '#94a3b8'
@@ -892,11 +994,11 @@ export default function App() {
               <button
                 onClick={() => { setHomeTab('vault'); setLobbyError(''); }}
                 style={{
-                  padding: '12px',
+                  padding: '10px',
                   borderRadius: '8px',
                   border: 'none',
                   fontWeight: 'bold',
-                  fontSize: '15px',
+                  fontSize: '0.95rem',
                   cursor: 'pointer',
                   background: homeTab === 'vault' ? '#4f46e5' : 'transparent',
                   color: homeTab === 'vault' ? '#fff' : '#94a3b8'
@@ -907,88 +1009,85 @@ export default function App() {
             </div>
 
             {lobbyError && (
-              <div style={{ padding: '14px', background: '#450a0a', border: '1px solid #dc2626', borderRadius: '8px', color: '#fca5a5', fontSize: '14px' }}>
+              <div style={{ padding: '12px', background: '#450a0a', border: '1px solid #dc2626', borderRadius: '8px', color: '#fca5a5', fontSize: '0.9rem' }}>
                 {lobbyError}
               </div>
             )}
 
             {homeTab === 'lobby' ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <div style={{ padding: '18px', background: '#0f172a', borderRadius: '12px', border: '1px solid #334155', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#94a3b8', textTransform: 'uppercase' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <div style={{ padding: '16px', background: '#0f172a', borderRadius: '12px', border: '1px solid #334155', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
+                    <span style={{ fontSize: '0.85rem', fontWeight: 'bold', color: '#94a3b8', textTransform: 'uppercase' }}>
                       Select Available Hero for New Room
                     </span>
                     <button
                       onClick={() => setHomeTab('vault')}
-                      style={{ background: 'none', border: 'none', color: '#818cf8', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer' }}
+                      style={{ background: 'none', border: 'none', color: '#818cf8', fontSize: '0.9rem', fontWeight: 'bold', cursor: 'pointer' }}
                     >
                       + Build New Level 1 Hero
                     </button>
                   </div>
                   {unlockedCharacters.length === 0 ? (
-                    <div style={{ fontSize: '14px', color: '#fbbf24' }}>
+                    <div style={{ fontSize: '0.9rem', color: '#fbbf24' }}>
                       No unlocked heroes available. Tap Character Vault above to create one before starting a new room.
                     </div>
                   ) : (
                     <select
                       value={selectedCharId}
                       onChange={e => setSelectedCharId(e.target.value)}
-                      style={{ background: '#020617', border: '1px solid #334155', borderRadius: '8px', padding: '12px', color: '#fff', fontSize: '15px' }}
+                      style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '8px', padding: '10px', color: '#fff' }}
                     >
                       <option value="">-- Choose an Unlocked Hero --</option>
                       {unlockedCharacters.map(c => (
                         <option key={c.id} value={c.id}>
-                          {c.name} (Lvl {c.level} {c.race} — {c.class} | HP: {c.hpCurrent}/{c.hpMax} | AC: {c.ac})
+                          {c.name} ({c.gender || 'Hero'} {c.race} — {c.class} | HP: {c.hpCurrent}/{c.hpMax} | AC: {c.ac})
                         </option>
                       ))}
                     </select>
                   )}
                 </div>
 
-                <div style={{ padding: '20px', background: '#0f172a', borderRadius: '12px', border: '1px solid rgba(99, 102, 241, 0.3)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div style={{ padding: '18px', background: '#0f172a', borderRadius: '12px', border: '1px solid rgba(99, 102, 241, 0.3)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#818cf8' }}>
-                    <Shield style={{ width: '20px', height: '20px' }} />
-                    <h2 style={{ fontSize: '16px', fontWeight: 'bold', margin: 0 }}>Host a New Campaign (AI Generates Unique World)</h2>
+                    <Shield style={{ width: '20px', height: '20px', flexShrink: 0 }} />
+                    <h2 style={{ fontSize: '1rem', fontWeight: 'bold', margin: 0 }}>Host a New Campaign (AI Generates Unique World)</h2>
                   </div>
-                  <p style={{ fontSize: '14px', color: '#94a3b8', margin: 0 }}>
-                    Locks your selected hero to this world and calls the AI Director to generate a brand-new opening story and quest hook.
-                  </p>
-                  <div style={{ display: 'flex', gap: '8px' }}>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                     <input
                       type="text"
-                      placeholder="NEW CAMPAIGN TITLE (e.g. Ashes of Ironhold)"
+                      placeholder="NEW CAMPAIGN TITLE"
                       value={newCampaignName}
                       onChange={e => setNewCampaignName(e.target.value)}
-                      style={{ flex: 1, background: '#020617', border: '1px solid #334155', borderRadius: '8px', padding: '12px 14px', fontSize: '15px', color: '#fff' }}
+                      style={{ flex: '1 1 180px', background: '#020617', border: '1px solid #334155', borderRadius: '8px', padding: '10px 12px', color: '#fff' }}
                     />
                     <button
                       onClick={() => startHostSession(null)}
-                      style={{ padding: '12px 22px', background: '#4f46e5', border: 'none', color: '#fff', fontWeight: '600', borderRadius: '8px', fontSize: '15px', cursor: 'pointer' }}
+                      style={{ padding: '10px 20px', background: '#4f46e5', border: 'none', color: '#fff', fontWeight: 'bold', borderRadius: '8px', cursor: 'pointer' }}
                     >
                       Host World
                     </button>
                   </div>
                 </div>
 
-                <div style={{ padding: '20px', background: '#0f172a', borderRadius: '12px', border: '1px solid rgba(16, 185, 129, 0.3)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div style={{ padding: '18px', background: '#0f172a', borderRadius: '12px', border: '1px solid rgba(16, 185, 129, 0.3)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#34d399' }}>
-                    <Users style={{ width: '20px', height: '20px' }} />
-                    <h2 style={{ fontSize: '16px', fontWeight: 'bold', margin: 0 }}>Join a Game (Client Player)</h2>
+                    <Users style={{ width: '20px', height: '20px', flexShrink: 0 }} />
+                    <h2 style={{ fontSize: '1rem', fontWeight: 'bold', margin: 0 }}>Join a Game (Client Player)</h2>
                   </div>
-                  <div style={{ display: 'flex', gap: '8px' }}>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                     <input
                       type="text"
                       placeholder="4-LETTER CODE"
                       maxLength={6}
                       value={joinCode}
                       onChange={e => setJoinCode(e.target.value)}
-                      style={{ flex: 1, background: '#020617', border: '1px solid #334155', borderRadius: '8px', padding: '12px 14px', fontSize: '15px', color: '#fff', textTransform: 'uppercase', fontFamily: 'monospace' }}
+                      style={{ flex: '1 1 140px', background: '#020617', border: '1px solid #334155', borderRadius: '8px', padding: '10px 12px', color: '#fff', textTransform: 'uppercase', fontFamily: 'monospace' }}
                     />
                     <button
                       onClick={startClientJoin}
                       disabled={isConnecting}
-                      style={{ padding: '12px 24px', background: isConnecting ? '#334155' : '#059669', border: 'none', color: '#fff', fontWeight: '600', borderRadius: '8px', fontSize: '15px', cursor: 'pointer' }}
+                      style={{ padding: '10px 20px', background: isConnecting ? '#334155' : '#059669', border: 'none', color: '#fff', fontWeight: 'bold', borderRadius: '8px', cursor: 'pointer' }}
                     >
                       {isConnecting ? 'Connecting...' : 'Join Room'}
                     </button>
@@ -996,8 +1095,8 @@ export default function App() {
                 </div>
 
                 {sessions.length > 0 && (
-                  <div style={{ padding: '20px', background: '#0f172a', borderRadius: '12px', border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    <h2 style={{ fontSize: '15px', fontWeight: 'bold', color: '#cbd5e1', margin: 0 }}>Resume Saved Campaign (Host)</h2>
+                  <div style={{ padding: '18px', background: '#0f172a', borderRadius: '12px', border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <h2 style={{ fontSize: '0.95rem', fontWeight: 'bold', color: '#cbd5e1', margin: 0 }}>Resume Saved Campaign (Host)</h2>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                       {sessions.map(s => {
                         const code = s.roomId || s.roomCode;
@@ -1005,27 +1104,26 @@ export default function App() {
                         return (
                           <div
                             key={s.id}
-                            style={{ padding: '14px', background: '#020617', borderRadius: '8px', border: '1px solid #1e293b', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}
+                            style={{ padding: '12px', background: '#020617', borderRadius: '8px', border: '1px solid #1e293b', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}
                           >
                             <div>
-                              <div style={{ fontWeight: '600', fontSize: '15px', color: '#818cf8' }}>
-                                {s.name} {code ? <span style={{ fontSize: '13px', color: '#64748b', fontFamily: 'monospace' }}>[{code}]</span> : null}
+                              <div style={{ fontWeight: 'bold', color: '#818cf8' }}>
+                                {s.name} {code ? <span style={{ fontSize: '0.8rem', color: '#64748b', fontFamily: 'monospace' }}>[{code}]</span> : null}
                               </div>
-                              <div style={{ fontSize: '13px', color: '#94a3b8', marginTop: '2px' }}>
+                              <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginTop: '2px' }}>
                                 {lockedHero ? `Locked Hero: ${lockedHero.name} (Lvl ${lockedHero.level} ${lockedHero.class})` : 'No hero locked yet'} • {new Date(s.lastPlayed).toLocaleDateString()}
                               </div>
                             </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                               <button
                                 onClick={() => startHostSession(s)}
-                                style={{ padding: '8px 14px', background: '#1e1b4b', border: '1px solid #3730a3', color: '#c7d2fe', borderRadius: '6px', fontSize: '13px', fontWeight: '600', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px' }}
+                                style={{ padding: '8px 12px', background: '#1e1b4b', border: '1px solid #3730a3', color: '#c7d2fe', borderRadius: '6px', fontSize: '0.85rem', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px' }}
                               >
                                 <Play style={{ width: '13px', height: '13px' }} /> Host Saved
                               </button>
                               <button
                                 onClick={() => handleDeleteSavedSession(s.id)}
                                 style={{ padding: '8px 10px', background: '#450a0a', border: '1px solid #7f1d1d', color: '#fca5a5', borderRadius: '6px', cursor: 'pointer' }}
-                                title="Delete Campaign & Unlock Hero"
                               >
                                 <Trash2 style={{ width: '15px', height: '15px' }} />
                               </button>
@@ -1038,36 +1136,47 @@ export default function App() {
                 )}
               </div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <form onSubmit={handleCreateCharacter} style={{ padding: '20px', background: '#0f172a', borderRadius: '12px', border: '1px solid #334155', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <form onSubmit={handleCreateCharacter} style={{ padding: '16px', background: '#0f172a', borderRadius: '12px', border: '1px solid #334155', display: 'flex', flexDirection: 'column', gap: '14px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#818cf8', fontWeight: 'bold', fontSize: '16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#818cf8', fontWeight: 'bold' }}>
                       <UserPlus style={{ width: '18px', height: '18px' }} />
-                      <span>Forge New Level 1 Hero (5e Rules Enforced)</span>
+                      <span>Forge New Level 1 Hero</span>
                     </div>
-                    <span style={{ fontSize: '12px', padding: '4px 10px', background: '#1e1b4b', border: '1px solid #4f46e5', color: '#c7d2fe', borderRadius: '6px', fontWeight: 'bold' }}>
+                    <span style={{ fontSize: '0.75rem', padding: '4px 8px', background: '#1e1b4b', border: '1px solid #4f46e5', color: '#c7d2fe', borderRadius: '6px', fontWeight: 'bold' }}>
                       Starts at Level 1 (0 / 300 XP)
                     </span>
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  {/* Name, Gender & Race */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '8px' }}>
                     <div>
-                      <label style={{ fontSize: '13px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Hero Name</label>
+                      <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Hero Name</label>
                       <input
                         type="text"
                         required
                         placeholder="e.g. Kaelen"
                         value={charName}
                         onChange={e => setCharName(e.target.value)}
-                        style={{ width: '100%', boxSizing: 'border-box', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '12px', color: '#fff', fontSize: '15px' }}
+                        style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '10px', color: '#fff' }}
                       />
                     </div>
                     <div>
-                      <label style={{ fontSize: '13px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Race (Applies Stat Bonuses)</label>
+                      <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Gender</label>
+                      <select
+                        value={charGender}
+                        onChange={e => setCharGender(e.target.value)}
+                        style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '10px', color: '#fff' }}
+                      >
+                        {GENDERS.map(g => <option key={g} value={g}>{g}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Race (Stat Bonus)</label>
                       <select
                         value={charRace}
                         onChange={e => setCharRace(e.target.value)}
-                        style={{ width: '100%', boxSizing: 'border-box', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '12px', color: '#fff', fontSize: '14px' }}
+                        style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '10px', color: '#fff' }}
                       >
                         {RACES.map(r => (
                           <option key={r.name} value={r.name}>
@@ -1079,11 +1188,11 @@ export default function App() {
                   </div>
 
                   <div>
-                    <label style={{ fontSize: '13px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>5e Background (Auto-Locks 2 Skills)</label>
+                    <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>5e Background (Auto-Locks 2 Skills)</label>
                     <select
                       value={charBackground}
                       onChange={e => setCharBackground(e.target.value)}
-                      style={{ width: '100%', boxSizing: 'border-box', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '12px', color: '#fff', fontSize: '14px' }}
+                      style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '10px', color: '#fff' }}
                     >
                       {BACKGROUNDS.map(b => (
                         <option key={b.name} value={b.name}>
@@ -1093,38 +1202,38 @@ export default function App() {
                     </select>
                   </div>
 
-                  <div style={{ padding: '14px', background: '#020617', borderRadius: '8px', border: '1px solid #1e293b', display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '10px', alignItems: 'end' }}>
+                  <div style={{ padding: '12px', background: '#020617', borderRadius: '8px', border: '1px solid #1e293b', display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '8px', alignItems: 'end' }}>
                     <div>
-                      <label style={{ fontSize: '11px', color: '#818cf8', fontWeight: 'bold', display: 'block', marginBottom: '4px' }}>PRIMARY CLASS (STARTS AT LVL 1)</label>
+                      <label style={{ fontSize: '0.7rem', color: '#818cf8', fontWeight: 'bold', display: 'block', marginBottom: '4px' }}>PRIMARY CLASS</label>
                       <select
                         value={charClass1}
                         onChange={e => {
                           setCharClass1(e.target.value);
                           setCharSub1((SUBCLASSES[e.target.value] || [])[0] || '');
                         }}
-                        style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '10px', color: '#fff', fontSize: '14px' }}
+                        style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '8px', color: '#fff' }}
                       >
                         {Object.keys(CLASSES).map(c => <option key={c} value={c}>{c} (d{CLASSES[c].hitDie})</option>)}
                       </select>
                     </div>
                     <div>
-                      <label style={{ fontSize: '11px', color: '#818cf8', fontWeight: 'bold', display: 'block', marginBottom: '4px' }}>PRIMARY SUBCLASS</label>
+                      <label style={{ fontSize: '0.7rem', color: '#818cf8', fontWeight: 'bold', display: 'block', marginBottom: '4px' }}>SUBCLASS</label>
                       <select
                         value={charSub1}
                         onChange={e => setCharSub1(e.target.value)}
-                        style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '10px', color: '#fff', fontSize: '14px' }}
+                        style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '8px', color: '#fff' }}
                       >
                         {(SUBCLASSES[charClass1] || []).map(sc => <option key={sc} value={sc}>{sc}</option>)}
                       </select>
                     </div>
-                    <div style={{ padding: '10px 12px', background: '#1e1b4b', border: '1px solid #4f46e5', borderRadius: '6px', fontSize: '13px', fontWeight: 'bold', color: '#c7d2fe', textAlign: 'center' }}>
+                    <div style={{ padding: '8px 10px', background: '#1e1b4b', border: '1px solid #4f46e5', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 'bold', color: '#c7d2fe' }}>
                       Lvl 1
                     </div>
                   </div>
 
-                  <div style={{ padding: '14px', background: '#020617', borderRadius: '8px', border: '1px solid #1e293b', display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '10px', alignItems: 'end' }}>
+                  <div style={{ padding: '12px', background: '#020617', borderRadius: '8px', border: '1px solid #1e293b', display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '8px', alignItems: 'end' }}>
                     <div>
-                      <label style={{ fontSize: '11px', color: '#34d399', fontWeight: 'bold', display: 'block', marginBottom: '4px' }}>PLANNED SECONDARY CLASS (DUAL-TREE)</label>
+                      <label style={{ fontSize: '0.7rem', color: '#34d399', fontWeight: 'bold', display: 'block', marginBottom: '4px' }}>PLANNED SECONDARY CLASS</label>
                       <select
                         value={charClass2}
                         onChange={e => {
@@ -1132,42 +1241,42 @@ export default function App() {
                           setCharClass2(val);
                           setCharSub2(val === 'None' ? '' : ((SUBCLASSES[val] || [])[0] || ''));
                         }}
-                        style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '10px', color: '#fff', fontSize: '14px' }}
+                        style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '8px', color: '#fff' }}
                       >
                         <option value="None">None (Single Class)</option>
                         {Object.keys(CLASSES).filter(c => c !== charClass1).map(c => <option key={c} value={c}>{c} (d{CLASSES[c].hitDie})</option>)}
                       </select>
                     </div>
                     <div>
-                      <label style={{ fontSize: '11px', color: '#34d399', fontWeight: 'bold', display: 'block', marginBottom: '4px' }}>SECONDARY SUBCLASS</label>
+                      <label style={{ fontSize: '0.7rem', color: '#34d399', fontWeight: 'bold', display: 'block', marginBottom: '4px' }}>SUBCLASS</label>
                       <select
                         disabled={charClass2 === 'None'}
                         value={charSub2}
                         onChange={e => setCharSub2(e.target.value)}
-                        style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '10px', color: '#fff', fontSize: '14px' }}
+                        style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '8px', color: '#fff' }}
                       >
                         {charClass2 === 'None' ? <option value="">N/A</option> : (SUBCLASSES[charClass2] || []).map(sc => <option key={sc} value={sc}>{sc}</option>)}
                       </select>
                     </div>
-                    <div style={{ padding: '10px 12px', background: '#064e3b', border: '1px solid #059669', borderRadius: '6px', fontSize: '12px', fontWeight: 'bold', color: '#6ee7b7', textAlign: 'center' }}>
-                      {charClass2 === 'None' ? 'Single' : 'Unlocks @ Lvl 2'}
+                    <div style={{ padding: '8px 10px', background: '#064e3b', border: '1px solid #059669', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 'bold', color: '#6ee7b7' }}>
+                      {charClass2 === 'None' ? 'Single' : '@ Lvl 2'}
                     </div>
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
-                      <label style={{ fontSize: '13px', color: '#94a3b8', fontWeight: 'bold' }}>
-                        Initial Ability Scores (Max 3 Rolls Per Stat — Locks After 3rd Roll)
+                      <label style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: 'bold' }}>
+                        Initial Ability Scores (Max 3 Rolls Per Stat)
                       </label>
                       <button
                         type="button"
                         disabled={allStatsLocked}
                         onClick={handleRollAllStats}
                         style={{
-                          padding: '8px 14px',
+                          padding: '6px 12px',
                           background: allStatsLocked ? '#1e293b' : '#4f46e5',
                           color: allStatsLocked ? '#64748b' : '#fff',
-                          fontSize: '13px',
+                          fontSize: '0.8rem',
                           fontWeight: 'bold',
                           borderRadius: '6px',
                           border: 'none',
@@ -1178,7 +1287,7 @@ export default function App() {
                       </button>
                     </div>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
                       {Object.entries(charStats).map(([stat, val]) => {
                         const raceBonus = currentRaceObj.bonuses[stat] || 0;
                         const totalVal = val + raceBonus;
@@ -1189,39 +1298,39 @@ export default function App() {
                         const isLocked = rollsLeft === 0;
 
                         return (
-                          <div key={stat} style={{ background: '#020617', border: isLocked ? '1px solid #451a03' : '1px solid #334155', borderRadius: '8px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'center' }}>
+                          <div key={stat} style={{ background: '#020617', border: isLocked ? '1px solid #451a03' : '1px solid #334155', borderRadius: '8px', padding: '10px', display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'center' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                              <span style={{ fontSize: '13px', fontWeight: 'bold', textTransform: 'uppercase', color: '#818cf8' }}>{stat}</span>
+                              <span style={{ fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase', color: '#818cf8' }}>{stat}</span>
                               <button
                                 type="button"
                                 disabled={isLocked}
                                 onClick={() => handleRollSingleStat(stat)}
                                 style={{
-                                  padding: '4px 8px',
+                                  padding: '3px 6px',
                                   background: isLocked ? '#1e293b' : '#1e1b4b',
                                   border: isLocked ? '1px solid #334155' : '1px solid #4f46e5',
                                   color: isLocked ? '#64748b' : '#c7d2fe',
-                                  fontSize: '11px',
+                                  fontSize: '0.7rem',
                                   fontWeight: 'bold',
                                   borderRadius: '4px',
                                   cursor: isLocked ? 'not-allowed' : 'pointer'
                                 }}
                               >
-                                {isLocked ? '🔒 Locked' : `🎲 (${rollsLeft} left)`}
+                                {isLocked ? '🔒' : `🎲 (${rollsLeft})`}
                               </button>
                             </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              <span style={{ fontSize: '20px', fontWeight: 'bold', color: '#fff' }}>{totalVal}</span>
-                              <span style={{ fontSize: '14px', fontWeight: 'bold', color: mod >= 0 ? '#34d399' : '#f87171' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              <span style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#fff' }}>{totalVal}</span>
+                              <span style={{ fontSize: '0.85rem', fontWeight: 'bold', color: mod >= 0 ? '#34d399' : '#f87171' }}>
                                 ({mod >= 0 ? `+${mod}` : mod})
                               </span>
                             </div>
-                            <div style={{ fontSize: '12px', color: '#94a3b8' }}>
-                              Base {val} {raceBonus > 0 ? `+ ${raceBonus} Race` : ''}
+                            <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>
+                              Base {val} {raceBonus > 0 ? `+${raceBonus}` : ''}
                             </div>
                             {log && (
-                              <div style={{ fontSize: '11px', color: '#fcd34d', fontFamily: 'monospace' }}>
-                                [{log.rawRolls.join(', ')}] drop {log.dropped}
+                              <div style={{ fontSize: '0.65rem', color: '#fcd34d', fontFamily: 'monospace' }}>
+                                [{log.rawRolls.join(',')}] -{log.dropped}
                               </div>
                             )}
                           </div>
@@ -1230,56 +1339,56 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '10px', alignItems: 'end' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '8px', alignItems: 'end' }}>
                     <div>
-                      <label style={{ fontSize: '13px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Starting Weapon</label>
+                      <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Starting Weapon</label>
                       <select
                         value={charWeaponName}
                         onChange={e => setCharWeaponName(e.target.value)}
-                        style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '12px', color: '#fff', fontSize: '14px' }}
+                        style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '10px', color: '#fff' }}
                       >
                         {WEAPONS_LIST.map(w => (
                           <option key={w.name} value={w.name}>
-                            {w.name} ({w.damageDice} • {w.finesse ? 'Finesse' : w.ranged ? 'Ranged' : 'Melee'})
+                            {w.name} ({w.damageDice})
                           </option>
                         ))}
                       </select>
                     </div>
                     <div>
-                      <label style={{ fontSize: '13px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>
-                        Starting Armor ({charClass1} Allowed)
+                      <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>
+                        Starting Armor ({charClass1})
                       </label>
                       <select
                         value={charArmorName}
                         onChange={e => setCharArmorName(e.target.value)}
-                        style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '12px', color: '#fff', fontSize: '14px' }}
+                        style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '10px', color: '#fff' }}
                       >
                         {starterArmorOptions.map(a => (
                           <option key={a.name} value={a.name}>
-                            {a.name} (AC {a.base} • {a.type})
+                            {a.name} (AC {a.base})
                           </option>
                         ))}
                       </select>
                     </div>
                     {canClassUseShield && (
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '12px', background: '#020617', border: '1px solid #334155', borderRadius: '6px', fontSize: '14px', cursor: 'pointer' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px', background: '#020617', border: '1px solid #334155', borderRadius: '6px', cursor: 'pointer' }}>
                         <input type="checkbox" checked={charShield} onChange={e => setCharShield(e.target.checked)} />
                         <span>Shield (+2)</span>
                       </label>
                     )}
                   </div>
 
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '14px', background: '#020617', borderRadius: '8px', border: '1px solid #1e293b' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px', background: '#020617', borderRadius: '8px', border: '1px solid #1e293b' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '4px' }}>
-                      <span style={{ fontSize: '13px', color: '#818cf8', fontWeight: 'bold' }}>
+                      <span style={{ fontSize: '0.8rem', color: '#818cf8', fontWeight: 'bold' }}>
                         Pick {charClass1} Class Skills ({chosenCustomSkills.length} / {maxClassSkills} Selected)
                       </span>
-                      <span style={{ fontSize: '12px', color: '#34d399' }}>
+                      <span style={{ fontSize: '0.75rem', color: '#34d399' }}>
                         Locked Saves: {(currentClassData.savingThrows || []).map(s => s.toUpperCase()).join(', ')}
                       </span>
                     </div>
 
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                       {SKILLS_5E.map(sk => {
                         const isLockedBg = lockedBgSkills.includes(sk.id);
                         const isAllowedByClass = selectableSkillPool.includes(sk.id);
@@ -1290,9 +1399,9 @@ export default function App() {
                           return (
                             <span
                               key={sk.id}
-                              style={{ padding: '8px 12px', borderRadius: '6px', fontSize: '13px', fontWeight: 'bold', background: '#064e3b', border: '1px solid #059669', color: '#6ee7b7' }}
+                              style={{ padding: '6px 10px', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 'bold', background: '#064e3b', border: '1px solid #059669', color: '#6ee7b7' }}
                             >
-                              🔒 {sk.name} (Background)
+                              🔒 {sk.name}
                             </span>
                           );
                         }
@@ -1311,9 +1420,9 @@ export default function App() {
                               }
                             }}
                             style={{
-                              padding: '8px 14px',
+                              padding: '6px 12px',
                               borderRadius: '6px',
-                              fontSize: '13px',
+                              fontSize: '0.8rem',
                               fontWeight: '600',
                               cursor: canPickMore || isChosen ? 'pointer' : 'not-allowed',
                               border: isChosen ? '1px solid #6366f1' : '1px solid #334155',
@@ -1331,43 +1440,43 @@ export default function App() {
 
                   <button
                     type="submit"
-                    style={{ padding: '14px', background: '#4f46e5', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', fontSize: '15px', cursor: 'pointer' }}
+                    style={{ padding: '12px', background: '#4f46e5', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}
                   >
                     Save Level 1 Hero to Vault
                   </button>
                 </form>
 
-                <div style={{ padding: '20px', background: '#0f172a', borderRadius: '12px', border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  <h3 style={{ fontSize: '15px', fontWeight: 'bold', margin: 0, color: '#cbd5e1' }}>Saved Heroes in Vault</h3>
+                <div style={{ padding: '16px', background: '#0f172a', borderRadius: '12px', border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <h3 style={{ fontSize: '0.95rem', fontWeight: 'bold', margin: 0, color: '#cbd5e1' }}>Saved Heroes in Vault</h3>
                   {characters.length === 0 ? (
-                    <p style={{ fontSize: '14px', color: '#64748b', margin: 0 }}>No characters forged yet.</p>
+                    <p style={{ fontSize: '0.85rem', color: '#64748b', margin: 0 }}>No characters forged yet.</p>
                   ) : (
                     characters.map(c => (
                       <div
                         key={c.id}
-                        style={{ padding: '14px', background: '#020617', borderRadius: '8px', border: '1px solid #1e293b', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+                        style={{ padding: '12px', background: '#020617', borderRadius: '8px', border: '1px solid #1e293b', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}
                       >
                         <div>
-                          <div style={{ fontWeight: 'bold', fontSize: '15px', color: '#fff', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <div style={{ fontWeight: 'bold', color: '#fff', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                             <span>{c.name}</span>
+                            <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>({c.gender || 'Hero'})</span>
                             {c.lockedRoomId ? (
-                              <span style={{ fontSize: '12px', padding: '2px 8px', background: '#451a03', border: '1px solid #92400e', color: '#fcd34d', borderRadius: '4px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                                <Lock style={{ width: '11px', height: '11px' }} /> Locked: {c.lockedCampaignName || c.lockedRoomId}
+                              <span style={{ fontSize: '0.7rem', padding: '2px 6px', background: '#451a03', border: '1px solid #92400e', color: '#fcd34d', borderRadius: '4px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                <Lock style={{ width: '10px', height: '10px' }} /> Locked: {c.lockedCampaignName || c.lockedRoomId}
                               </span>
                             ) : (
-                              <span style={{ fontSize: '12px', padding: '2px 8px', background: '#064e3b', color: '#6ee7b7', borderRadius: '4px' }}>
+                              <span style={{ fontSize: '0.7rem', padding: '2px 6px', background: '#064e3b', color: '#6ee7b7', borderRadius: '4px' }}>
                                 Available
                               </span>
                             )}
                           </div>
-                          <div style={{ fontSize: '13px', color: '#94a3b8', marginTop: '4px' }}>
-                            {c.race} • Lvl {c.level} {c.class} {c.secondaryClass && c.secondaryClass !== 'None' && c.secondaryLevel === 0 ? `(Dual Plan: ${c.secondaryClass})` : ''} • HP: {c.hpCurrent}/{c.hpMax} • AC: {c.ac}
+                          <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginTop: '4px' }}>
+                            {c.race} • Lvl {c.level} {c.class} • HP: {c.hpCurrent}/{c.hpMax} • AC: {c.ac}
                           </div>
                         </div>
                         <button
                           onClick={() => handleDeleteCharacter(c.id)}
                           style={{ padding: '8px 10px', background: '#450a0a', border: '1px solid #7f1d1d', color: '#fca5a5', borderRadius: '6px', cursor: 'pointer' }}
-                          title="Delete Hero"
                         >
                           <Trash2 style={{ width: '15px', height: '15px' }} />
                         </button>
@@ -1392,9 +1501,9 @@ export default function App() {
 
       {showSettings && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', zIndex: 100 }}>
-          <div style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '12px', maxWidth: '440px', width: '100%', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px', boxSizing: 'border-box' }}>
+          <div style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: '12px', maxWidth: '440px', width: '100%', padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#818cf8', fontWeight: 'bold', fontSize: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#818cf8', fontWeight: 'bold' }}>
                 <Key style={{ width: '18px', height: '18px' }} />
                 <span>OpenRouter AI & Model Selector</span>
               </div>
@@ -1405,18 +1514,18 @@ export default function App() {
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <div>
-                <label style={{ fontSize: '13px', fontWeight: '600', color: '#cbd5e1', display: 'block', marginBottom: '4px' }}>OpenRouter API Key</label>
+                <label style={{ fontSize: '0.8rem', fontWeight: '600', color: '#cbd5e1', display: 'block', marginBottom: '4px' }}>OpenRouter API Key</label>
                 <input
                   type="password"
                   placeholder="sk-or-v1-..."
                   value={apiKeyInput}
                   onChange={e => setApiKeyInput(e.target.value)}
-                  style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '10px', fontSize: '14px', color: '#fff', fontFamily: 'monospace', boxSizing: 'border-box' }}
+                  style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '10px', color: '#fff', fontFamily: 'monospace' }}
                 />
               </div>
 
               <div>
-                <label style={{ fontSize: '13px', fontWeight: '600', color: '#cbd5e1', display: 'block', marginBottom: '4px' }}>Select Uncensored RP Model</label>
+                <label style={{ fontSize: '0.8rem', fontWeight: '600', color: '#cbd5e1', display: 'block', marginBottom: '4px' }}>Select Uncensored RP Model</label>
                 <select
                   value={customModelMode ? 'CUSTOM' : modelInput}
                   onChange={e => {
@@ -1427,7 +1536,7 @@ export default function App() {
                       setModelInput(e.target.value);
                     }
                   }}
-                  style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '10px', fontSize: '14px', color: '#fff', boxSizing: 'border-box' }}
+                  style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '10px', color: '#fff' }}
                 >
                   {UNCENSORED_MODELS.map(m => (
                     <option key={m.id} value={m.id}>{m.name}</option>
@@ -1438,13 +1547,13 @@ export default function App() {
 
               {customModelMode && (
                 <div>
-                  <label style={{ fontSize: '13px', fontWeight: '600', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Custom Model Slug</label>
+                  <label style={{ fontSize: '0.8rem', fontWeight: '600', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Custom Model Slug</label>
                   <input
                     type="text"
                     placeholder="organization/model-name"
                     value={modelInput}
                     onChange={e => setModelInput(e.target.value)}
-                    style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '10px', fontSize: '14px', color: '#fff', fontFamily: 'monospace', boxSizing: 'border-box' }}
+                    style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '10px', color: '#fff', fontFamily: 'monospace' }}
                   />
                 </div>
               )}
@@ -1453,15 +1562,15 @@ export default function App() {
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '4px' }}>
               <button
                 onClick={() => setShowSettings(false)}
-                style={{ padding: '10px 16px', background: '#1e293b', color: '#cbd5e1', fontSize: '14px', fontWeight: '600', borderRadius: '6px', border: 'none', cursor: 'pointer' }}
+                style={{ padding: '8px 14px', background: '#1e293b', color: '#cbd5e1', fontWeight: '600', borderRadius: '6px', border: 'none', cursor: 'pointer' }}
               >
                 Cancel
               </button>
               <button
                 onClick={handleSaveSettings}
-                style={{ padding: '10px 16px', background: '#4f46e5', color: '#fff', fontSize: '14px', fontWeight: '600', borderRadius: '6px', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                style={{ padding: '8px 14px', background: '#4f46e5', color: '#fff', fontWeight: '600', borderRadius: '6px', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
               >
-                <Check style={{ width: '15px', height: '15px' }} /> Lock In Model & Key
+                <Check style={{ width: '15px', height: '15px' }} /> Save
               </button>
             </div>
           </div>
