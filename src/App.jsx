@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Shield, Users, Play, ArrowLeft, Settings, Key, X, Check, Trash2, UserPlus, Lock } from 'lucide-react';
+import { Shield, Users, Play, ArrowLeft, Settings, Key, X, Check, Trash2, UserPlus, Lock, Wifi } from 'lucide-react';
 import { GameNetwork } from './utils/peerSync';
 import {
   getSessions,
@@ -32,7 +32,16 @@ import {
   getMaxSpellSlots,
   rollPhysical
 } from './utils/dndEngine';
-import { RACES, BACKGROUNDS, CLASSES, SUBCLASSES, WEAPONS_LIST, ARMOR_LIST, SKILLS_5E } from './data/rules5e.js';
+import {
+  ALIGNMENTS_5E,
+  RACES,
+  BACKGROUNDS,
+  CLASSES,
+  SUBCLASSES,
+  WEAPONS_LIST,
+  ARMOR_LIST,
+  SKILLS_5E
+} from './data/rules5e.js';
 import { getMonster } from './data/index';
 import PlayerScreen from './components/PlayerScreen';
 
@@ -75,6 +84,14 @@ export default function App() {
   const [joinCode, setJoinCode] = useState('');
   const [newCampaignName, setNewCampaignName] = useState('');
 
+  // Zero-Service Offline Hotspot Pairing State
+  const [showOfflineModal, setShowOfflineModal] = useState(false);
+  const [offlineInviteCode, setOfflineInviteCode] = useState('');
+  const [offlineAnswerInput, setOfflineAnswerInput] = useState('');
+  const [offlineJoinOfferInput, setOfflineJoinOfferInput] = useState('');
+  const [offlineGeneratedAnswer, setOfflineGeneratedAnswer] = useState('');
+  const [offlineStatus, setOfflineStatus] = useState('');
+
   const [showSettings, setShowSettings] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState(getApiKey());
   const [modelInput, setModelInput] = useState(getSelectedModel());
@@ -85,6 +102,7 @@ export default function App() {
 
   const [charName, setCharName] = useState('');
   const [charGender, setCharGender] = useState('Male');
+  const [charAlignment, setCharAlignment] = useState('True Neutral');
   const [charRace, setCharRace] = useState('Human');
   const [charBackground, setCharBackground] = useState('Soldier');
   const [charClass1, setCharClass1] = useState('Fighter');
@@ -252,6 +270,7 @@ export default function App() {
       id: `char_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
       name: charName.trim(),
       gender: charGender,
+      alignment: charAlignment,
       race: charRace,
       background: charBackground,
       class: classString,
@@ -355,6 +374,7 @@ export default function App() {
       equipItem,
       lootIndex,
       newGender,
+      newAlignment,
       rollFailed = false,
       diceTrays = [],
       skipAi
@@ -370,6 +390,12 @@ export default function App() {
 
     if (actionType === 'UPDATE_GENDER' && newGender) {
       state.party = state.party.map(p => (p.id === actorId ? { ...p, gender: newGender } : p));
+      return state;
+    }
+
+    if (actionType === 'UPDATE_ALIGNMENT' && newAlignment) {
+      state.party = state.party.map(p => (p.id === actorId ? { ...p, alignment: newAlignment } : p));
+      state.journal = [...state.journal, `[Alignment] ${actorName}'s alignment is now ${newAlignment}.`];
       return state;
     }
 
@@ -714,6 +740,78 @@ export default function App() {
     }
   };
 
+  // Host: Generate Offline Hotspot Invite Code (Works while cellular room is already running)
+  const handleGenerateOfflineInvite = async () => {
+    if (!networkRef.current) return;
+    try {
+      setOfflineStatus('Generating local hotspot invite...');
+      const code = await networkRef.current.createOfflineInvite();
+      setOfflineInviteCode(code);
+      setOfflineStatus('Invite ready! Copy and send to your local Wi-Fi/Hotspot player.');
+    } catch (err) {
+      setOfflineStatus(`Error: ${err.message}`);
+    }
+  };
+
+  const handleHostCompleteOfflineLink = async () => {
+    if (!networkRef.current || !offlineAnswerInput.trim()) return;
+    try {
+      await networkRef.current.completeOfflineLink(offlineAnswerInput);
+      setOfflineAnswerInput('');
+      setOfflineInviteCode('');
+      setOfflineStatus('Local player linked! Syncing party state...');
+      if (activeSessionRef.current?.gameState) {
+        setTimeout(() => {
+          networkRef.current?.broadcastState(activeSessionRef.current.gameState);
+        }, 400);
+      }
+    } catch (err) {
+      setOfflineStatus(`Failed to link: ${err.message}`);
+    }
+  };
+
+  // Client: Join via Zero-Service Hotspot Invite Code
+  const handleClientAcceptOfflineInvite = async () => {
+    setLobbyError('');
+    const allChars = getCharacters();
+    const candidateChar = allChars.find(c => c.id === selectedCharId) || allChars[0];
+    if (!candidateChar) {
+      setOfflineStatus('Select or create a hero in the Character Vault first.');
+      return;
+    }
+    if (!offlineJoinOfferInput.trim()) {
+      setOfflineStatus('Paste the Host Invite Code first.');
+      return;
+    }
+
+    try {
+      setOfflineStatus('Generating your Answer Code...');
+      const net = new GameNetwork(false, 'LOCAL', handleNetworkData, (errMsg) => setLobbyError(errMsg));
+      networkRef.current = net;
+
+      const answer = await net.acceptOfflineInvite(offlineJoinOfferInput, () => {
+        setActiveCharacter(candidateChar);
+        setNetwork(net);
+        const sessionObj = {
+          id: `offline_client_${Date.now()}`,
+          name: 'Local Hotspot Campaign',
+          role: 'player',
+          roomId: 'LOCAL',
+          gameState: normalizeGameState({ party: [candidateChar] }, 'Local Hotspot Campaign'),
+          lastPlayed: Date.now()
+        };
+        setActiveSession(sessionObj);
+        setShowOfflineModal(false);
+        net.sendAction('SYNC_CHARACTER', candidateChar);
+      });
+
+      setOfflineGeneratedAnswer(answer);
+      setOfflineStatus('Copy this Answer Code and give it to the Host to finish linking!');
+    } catch (err) {
+      setOfflineStatus(`Invalid Invite Code: ${err.message}`);
+    }
+  };
+
   const resolveCharacterForRoom = (roomCode, campaignTitle, isExistingSession = false) => {
     const allChars = getCharacters();
     const alreadyLocked = allChars.find(
@@ -934,10 +1032,17 @@ export default function App() {
             </span>
           )}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+          <button
+            onClick={() => { setOfflineStatus(''); setShowOfflineModal(true); }}
+            style={{ padding: '6px 9px', background: '#064e3b', border: '1px solid #059669', color: '#6ee7b7', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+            title="Pair offline hotspot devices alongside cellular players"
+          >
+            <Wifi style={{ width: '13px', height: '13px' }} /> Local Link
+          </button>
           <button
             onClick={cycleUiScale}
-            style={{ padding: '6px 10px', background: '#1e1b4b', border: '1px solid #4f46e5', color: '#c7d2fe', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 'bold', cursor: 'pointer' }}
+            style={{ padding: '6px 9px', background: '#1e1b4b', border: '1px solid #4f46e5', color: '#c7d2fe', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer' }}
             title="Tap to change text scale"
           >
             A+ ({uiScale.toUpperCase()})
@@ -1041,18 +1146,21 @@ export default function App() {
                       <option value="">-- Choose an Unlocked Hero --</option>
                       {unlockedCharacters.map(c => (
                         <option key={c.id} value={c.id}>
-                          {c.name} ({c.gender || 'Hero'} {c.race} — {c.class} | HP: {c.hpCurrent}/{c.hpMax} | AC: {c.ac})
+                          {c.name} ({c.alignment || 'True Neutral'} • {c.race} {c.class} | HP: {c.hpCurrent}/{c.hpMax} | AC: {c.ac})
                         </option>
                       ))}
                     </select>
                   )}
                 </div>
 
-                <div style={{ padding: '18px', background: '#0f172a', borderRadius: '12px', border: '1px solid rgba(99, 102, 241, 0.3)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div style={{ padding: '18px', background: '#0f172a', borderRadius: '12px', border: '1px solid rgba(99, 102, 241, 0.3)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#818cf8' }}>
                     <Shield style={{ width: '20px', height: '20px', flexShrink: 0 }} />
-                    <h2 style={{ fontSize: '1rem', fontWeight: 'bold', margin: 0 }}>Host a New Campaign (AI Generates Unique World)</h2>
+                    <h2 style={{ fontSize: '1rem', fontWeight: 'bold', margin: 0 }}>Host Hybrid Room (Local Wi-Fi/Hotspot + Long-Distance Cell)</h2>
                   </div>
+                  <p style={{ fontSize: '0.82rem', color: '#94a3b8', margin: 0 }}>
+                    Accepts 4-letter Room Code connections over 5G/LTE cellular AND local Wi-Fi/Hotspot connections simultaneously.
+                  </p>
                   <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                     <input
                       type="text"
@@ -1070,15 +1178,24 @@ export default function App() {
                   </div>
                 </div>
 
-                <div style={{ padding: '18px', background: '#0f172a', borderRadius: '12px', border: '1px solid rgba(16, 185, 129, 0.3)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#34d399' }}>
-                    <Users style={{ width: '20px', height: '20px', flexShrink: 0 }} />
-                    <h2 style={{ fontSize: '1rem', fontWeight: 'bold', margin: 0 }}>Join a Game (Client Player)</h2>
+                <div style={{ padding: '18px', background: '#0f172a', borderRadius: '12px', border: '1px solid rgba(16, 185, 129, 0.3)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#34d399' }}>
+                      <Users style={{ width: '20px', height: '20px', flexShrink: 0 }} />
+                      <h2 style={{ fontSize: '1rem', fontWeight: 'bold', margin: 0 }}>Join a Game (Cell / Wi-Fi / Offline Hotspot)</h2>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => { setOfflineStatus(''); setShowOfflineModal(true); }}
+                      style={{ padding: '5px 10px', background: '#064e3b', border: '1px solid #059669', color: '#6ee7b7', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 'bold', cursor: 'pointer' }}
+                    >
+                      📶 No-Signal Hotspot Join
+                    </button>
                   </div>
                   <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                     <input
                       type="text"
-                      placeholder="4-LETTER CODE"
+                      placeholder="4-LETTER ROOM CODE"
                       maxLength={6}
                       value={joinCode}
                       onChange={e => setJoinCode(e.target.value)}
@@ -1089,7 +1206,7 @@ export default function App() {
                       disabled={isConnecting}
                       style={{ padding: '10px 20px', background: isConnecting ? '#334155' : '#059669', border: 'none', color: '#fff', fontWeight: 'bold', borderRadius: '8px', cursor: 'pointer' }}
                     >
-                      {isConnecting ? 'Connecting...' : 'Join Room'}
+                      {isConnecting ? 'Connecting (Cell/LAN)...' : 'Join Room'}
                     </button>
                   </div>
                 </div>
@@ -1148,7 +1265,7 @@ export default function App() {
                     </span>
                   </div>
 
-                  {/* Name, Gender & Race */}
+                  {/* Name, Gender, Alignment & Race */}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '8px' }}>
                     <div>
                       <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Hero Name</label>
@@ -1169,6 +1286,16 @@ export default function App() {
                         style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '10px', color: '#fff' }}
                       >
                         {GENDERS.map(g => <option key={g} value={g}>{g}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>5e Alignment</label>
+                      <select
+                        value={charAlignment}
+                        onChange={e => setCharAlignment(e.target.value)}
+                        style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '10px', color: '#fff' }}
+                      >
+                        {ALIGNMENTS_5E.map(al => <option key={al} value={al}>{al}</option>)}
                       </select>
                     </div>
                     <div>
@@ -1457,9 +1584,9 @@ export default function App() {
                         style={{ padding: '12px', background: '#020617', borderRadius: '8px', border: '1px solid #1e293b', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}
                       >
                         <div>
-                          <div style={{ fontWeight: 'bold', color: '#fff', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                          <div style={{ fontWeight: 'bold', color: '#fff', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                             <span>{c.name}</span>
-                            <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>({c.gender || 'Hero'})</span>
+                            <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>({c.gender || 'Hero'} • {c.alignment || 'True Neutral'})</span>
                             {c.lockedRoomId ? (
                               <span style={{ fontSize: '0.7rem', padding: '2px 6px', background: '#451a03', border: '1px solid #92400e', color: '#fcd34d', borderRadius: '4px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                                 <Lock style={{ width: '10px', height: '10px' }} /> Locked: {c.lockedCampaignName || c.lockedRoomId}
@@ -1498,6 +1625,104 @@ export default function App() {
           />
         )}
       </main>
+
+      {/* ZERO-SERVICE LOCAL HOTSPOT PAIRING MODAL (Works Simultaneously Alongside Cellular Room Code) */}
+      {showOfflineModal && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', zIndex: 110 }}>
+          <div style={{ background: '#0f172a', border: '1px solid #059669', borderRadius: '12px', maxWidth: '460px', width: '100%', padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '90dvh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#34d399', fontWeight: 'bold' }}>
+                <Wifi style={{ width: '18px', height: '18px' }} />
+                <span>Direct Local Hotspot Link (No Cell Service Required)</span>
+              </div>
+              <button onClick={() => setShowOfflineModal(false)} style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}>
+                <X style={{ width: '20px', height: '20px' }} />
+              </button>
+            </div>
+
+            <p style={{ fontSize: '0.8rem', color: '#94a3b8', margin: 0, lineHeight: '1.4' }}>
+              Connect devices on the same Wi-Fi or Phone Hotspot with zero cell signal. Local Hotspot players and long-distance 5G/LTE Room Code players play in the same room simultaneously!
+            </p>
+
+            {offlineStatus && (
+              <div style={{ padding: '8px 10px', background: '#020617', border: '1px solid #334155', borderRadius: '6px', color: '#fcd34d', fontSize: '0.8rem' }}>
+                {offlineStatus}
+              </div>
+            )}
+
+            {activeSession?.role === 'host' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <button
+                  type="button"
+                  onClick={handleGenerateOfflineInvite}
+                  style={{ padding: '10px', background: '#059669', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}
+                >
+                  1. Generate Host Invite Code for Local Player
+                </button>
+                {offlineInviteCode && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <label style={{ fontSize: '0.75rem', color: '#6ee7b7' }}>Copy & Send This Invite Code to Local Player:</label>
+                    <textarea
+                      readOnly
+                      rows={3}
+                      value={offlineInviteCode}
+                      onClick={e => { e.target.select(); navigator.clipboard?.writeText(offlineInviteCode); }}
+                      style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '8px', color: '#fff', fontSize: '0.7rem', fontFamily: 'monospace' }}
+                    />
+                  </div>
+                )}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{ fontSize: '0.75rem', color: '#cbd5e1' }}>2. Paste Local Player's Answer Code Here:</label>
+                  <textarea
+                    rows={2}
+                    placeholder="Paste Answer Code from local player..."
+                    value={offlineAnswerInput}
+                    onChange={e => setOfflineAnswerInput(e.target.value)}
+                    style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '8px', color: '#fff', fontSize: '0.7rem', fontFamily: 'monospace' }}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleHostCompleteOfflineLink}
+                    style={{ padding: '10px', background: '#4f46e5', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}
+                  >
+                    Complete Local Link
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <label style={{ fontSize: '0.75rem', color: '#cbd5e1' }}>1. Paste Host's Offline Invite Code:</label>
+                <textarea
+                  rows={3}
+                  placeholder="Paste Host Invite Code here..."
+                  value={offlineJoinOfferInput}
+                  onChange={e => setOfflineJoinOfferInput(e.target.value)}
+                  style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '8px', color: '#fff', fontSize: '0.7rem', fontFamily: 'monospace' }}
+                />
+                <button
+                  type="button"
+                  onClick={handleClientAcceptOfflineInvite}
+                  style={{ padding: '10px', background: '#059669', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}
+                >
+                  2. Generate My Answer Code
+                </button>
+                {offlineGeneratedAnswer && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <label style={{ fontSize: '0.75rem', color: '#6ee7b7' }}>3. Copy & Give This Answer Code to Host:</label>
+                    <textarea
+                      readOnly
+                      rows={3}
+                      value={offlineGeneratedAnswer}
+                      onClick={e => { e.target.select(); navigator.clipboard?.writeText(offlineGeneratedAnswer); }}
+                      style={{ width: '100%', background: '#020617', border: '1px solid #334155', borderRadius: '6px', padding: '8px', color: '#fff', fontSize: '0.7rem', fontFamily: 'monospace' }}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {showSettings && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', zIndex: 100 }}>

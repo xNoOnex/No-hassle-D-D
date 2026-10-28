@@ -25,13 +25,13 @@ export async function generateCampaignIntro({ campaignName, party = [] }) {
   }
 
   const partyDesc = party
-    .map(p => `${p.name} (Gender: ${p.gender || 'Unspecified'}, Lvl ${p.level} ${p.race} ${p.class}, Background: ${p.background || 'Adventurer'})`)
+    .map(p => `${p.name} (Gender: ${p.gender || 'Unspecified'}, Alignment: ${p.alignment || 'True Neutral'}, Lvl ${p.level} ${p.race} ${p.class}, Background: ${p.background || 'Adventurer'})`)
     .join(', ') || 'an adventurer';
 
   const prompt = `You are a master D&D 5e Dungeon Master. Write the opening scene for a brand-new dark fantasy campaign titled "${campaignName}" starring ${partyDesc}.
 Formatting Rules:
 - Write 2 vivid, atmospheric paragraphs (4 to 6 sentences total). Do NOT print bracket headers like [Paragraph 1] or [Opening Scene].
-- Always use the correct gender pronouns for each hero as listed above.
+- Always use the correct gender pronouns and factor in each hero's 5e Alignment (${party.map(p => p.alignment || 'True Neutral').join(', ')}).
 - Paragraph 1: Establish the gritty setting, atmosphere, and why ${partyDesc} is here.
 - Paragraph 2: Present an immediate, concrete encounter, mystery, or NPC interaction happening right in front of them, and end by asking what they do.
 - Include exactly one <journal>Quest: ...</journal> tag at the very end.`;
@@ -98,7 +98,7 @@ Player RP Notation Key:
 
 Storytelling & Continuity Rules:
 1. Write 2 cohesive, immersive paragraphs (4 to 6 sentences total) without printing bracket headers like "[Turn Outcome]" or "[Next Turn Setup]".
-2. Always respect each character's listed Gender/Pronouns.
+2. Always respect each character's listed Gender/Pronouns and 5e Alignment (Lawful/Neutral/Chaotic, Good/Neutral/Evil) when describing NPC reactions and moral consequences.
 3. Paragraph 1: Describe the immediate physical result of the player's action and dice roll, plus any monster counter-attacks listed in the log.
 4. Paragraph 2: Advance the scene forward—show how NPCs, enemies, or the environment react, and set up the immediate situation for the next turn.
 5. ${failureRule}
@@ -108,7 +108,7 @@ Storytelling & Continuity Rules:
 8. Only when a player genuinely finds or earns an item on a SUCCESSFUL roll, include: <loot name="Item Name" qty="1" type="Weapon|Armor|Potion|Gear" />`;
 
   const partyList = (gameState.party || [])
-    .map(p => `${p.name} (Gender: ${p.gender || 'Unspecified'}, Lvl ${p.level || 1} ${p.race} ${p.class}, HP: ${p.hpCurrent}/${p.hpMax}, AC: ${p.ac})`)
+    .map(p => `${p.name} (Gender: ${p.gender || 'Unspecified'}, Alignment: ${p.alignment || 'True Neutral'}, Lvl ${p.level || 1} ${p.race} ${p.class}, HP: ${p.hpCurrent}/${p.hpMax}, AC: ${p.ac})`)
     .join(', ') || 'Solo Adventurer';
 
   const monsterList = (gameState.activeMonsters || [])

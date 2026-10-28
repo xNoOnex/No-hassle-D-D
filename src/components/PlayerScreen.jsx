@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   Swords, User, Backpack, BookOpen,
-  Target, RefreshCw, Dices, Users, Lock, Sparkles, Heart, HelpCircle, X
+  Target, RefreshCw, Dices, Users, Sparkles, Heart, HelpCircle, X
 } from 'lucide-react';
 import {
   calculateMod,
@@ -16,7 +16,7 @@ import {
   getItemCategory,
   isItemEquipped
 } from '../utils/dndEngine';
-import { SKILLS_5E, XP_THRESHOLDS } from '../data/rules5e.js';
+import { ALIGNMENTS_5E, SKILLS_5E, XP_THRESHOLDS } from '../data/rules5e.js';
 import { getAllSpells } from '../data/index';
 
 const RP_MODES = [
@@ -120,6 +120,7 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
     id: 'fallback',
     name: 'Hero',
     gender: 'Male',
+    alignment: 'True Neutral',
     race: 'Human',
     background: 'Soldier',
     class: 'Fighter 1',
@@ -160,7 +161,6 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
   const currentTurnName = activeCombatUnit ? activeCombatUnit.name : (activeExplorationUnit?.name || hero.name);
   const isMyTurn = currentTurnName === hero.name;
 
-  // Clicking a Skill or Save queues it onto the Story input bar so you can type what you're doing first
   const handleQueueSkillRoll = (skill) => {
     const isProf = (hero.proficiencies || []).includes(skill.id);
     const mod = calculateMod(hero.baseStats?.[skill.stat] ?? 10) + (isProf ? profBonus : 0);
@@ -208,7 +208,6 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
     const rawText = customActionText.trim();
     if (!rawText && !queuedCheck) return;
 
-    // Pure [ ... ] (single brackets, not [[ ... ]]) sends Party OOC Chat without rolling or calling AI
     if (rawText.startsWith('[') && !rawText.startsWith('[[') && rawText.endsWith(']')) {
       dispatchAction({
         actionType: 'OOC_CHAT',
@@ -458,6 +457,16 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
     });
   };
 
+  const handleAlignmentChange = (newAlignment) => {
+    dispatchAction({
+      actionType: 'UPDATE_ALIGNMENT',
+      actorId: hero.id,
+      actorName: hero.name,
+      newAlignment,
+      skipAi: true
+    });
+  };
+
   const handleRest = (restType) => {
     dispatchAction({
       actionType: 'REST',
@@ -520,7 +529,7 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
         </div>
       </div>
 
-      {/* PINNED 5 NAVIGATION TABS (Never Scrolls Off-Screen & Never Clips) */}
+      {/* PINNED 5 NAVIGATION TABS */}
       <div style={{ flexShrink: 0, display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: '4px', background: '#0f172a', padding: '5px', borderRadius: '10px', border: '1px solid #1e293b' }}>
         {[
           { id: 'story', label: 'Story', icon: BookOpen },
@@ -560,7 +569,7 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
         })}
       </div>
 
-      {/* TAB 1: INDEPENDENTLY SCROLLABLE STORY FEED + PINNED RP EXPRESSION BAR */}
+      {/* TAB 1: INDEPENDENTLY SCROLLABLE STORY FEED + PINNED RP BAR */}
       {activeTab === 'story' && (
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: '8px', overflow: 'hidden' }}>
           <div
@@ -618,7 +627,6 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
             )}
           </div>
 
-          {/* PINNED BOTTOM RP EXPRESSION CONTROLS, QUEUED CHECK BANNER & INPUT */}
           <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '6px', background: '#0f172a', padding: '10px', borderRadius: '12px', border: '1px solid #1e293b' }}>
             {queuedCheck && (
               <div style={{ padding: '6px 10px', background: '#1e1b4b', border: '1px solid #6366f1', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px' }}>
@@ -644,7 +652,6 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
               </div>
             )}
 
-            {/* RP Expression Quick-Buttons + Key Table Toggle */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '5px', overflowX: 'auto', paddingBottom: '2px' }}>
               {RP_MODES.map(mode => (
                 <button
@@ -726,7 +733,7 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
         </div>
       )}
 
-      {/* TAB 2: AUTOMATED COMBAT & NON-CLIPPING SPELL BAR */}
+      {/* TAB 2: AUTOMATED COMBAT */}
       {activeTab === 'combat' && (
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', paddingBottom: '16px' }}>
           <div style={{ padding: '14px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -859,20 +866,27 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
         </div>
       )}
 
-      {/* TAB 3: LIVE HERO SHEET (Gender Switcher, Working Equip/Unequip, Party Loot Transfer & Queued Checks) */}
+      {/* TAB 3: LIVE HERO SHEET (Gender, 5e Alignment, Equip/Unequip & Queued Skills) */}
       {activeTab === 'character' && (
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', paddingBottom: '16px' }}>
           <div style={{ padding: '14px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
               <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                   <h2 style={{ fontSize: '1.2rem', fontWeight: 'bold', margin: 0, color: '#fff' }}>{hero.name}</h2>
                   <select
                     value={hero.gender || 'Male'}
                     onChange={e => handleGenderChange(e.target.value)}
-                    style={{ background: '#020617', border: '1px solid #334155', color: '#c7d2fe', borderRadius: '6px', padding: '2px 6px', fontSize: '0.78rem' }}
+                    style={{ background: '#020617', border: '1px solid #334155', color: '#c7d2fe', borderRadius: '6px', padding: '3px 6px', fontSize: '0.78rem' }}
                   >
                     {GENDERS.map(g => <option key={g} value={g}>{g}</option>)}
+                  </select>
+                  <select
+                    value={hero.alignment || 'True Neutral'}
+                    onChange={e => handleAlignmentChange(e.target.value)}
+                    style={{ background: '#020617', border: '1px solid #4f46e5', color: '#fcd34d', borderRadius: '6px', padding: '3px 6px', fontSize: '0.78rem', fontWeight: 'bold' }}
+                  >
+                    {ALIGNMENTS_5E.map(al => <option key={al} value={al}>{al}</option>)}
                   </select>
                 </div>
                 <div style={{ fontSize: '0.85rem', color: '#94a3b8', marginTop: '4px' }}>
@@ -885,7 +899,6 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
               </div>
             </div>
 
-            {/* 2x2 Grid so GOLD and WEAPON never clip on narrow screens */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
               <div style={{ padding: '10px', background: '#020617', border: '1px solid #1e293b', borderRadius: '8px', textAlign: 'center' }}>
                 <div style={{ fontSize: '0.72rem', color: '#94a3b8', textTransform: 'uppercase' }}>Hit Points</div>
@@ -927,7 +940,6 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
               </div>
             </div>
 
-            {/* Hero Inventory: Smart Equip / Unequip / Use Potion / Send to Party Loot */}
             <div>
               <div style={{ fontSize: '0.78rem', fontWeight: 'bold', color: '#94a3b8', textTransform: 'uppercase', marginBottom: '6px' }}>
                 Hero Bag ({hero.inventory?.length || 0} Items — Equip Gear or Send to Party Loot)
@@ -1058,7 +1070,7 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
         </div>
       )}
 
-      {/* TAB 4: CONNECTED PARTY */}
+      {/* TAB 4: CONNECTED PARTY (Shows Gender & Alignment) */}
       {activeTab === 'party' && (
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', paddingBottom: '16px' }}>
           <div style={{ padding: '14px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -1073,7 +1085,7 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
                 <div key={member.id} style={{ padding: '12px', background: '#020617', border: '1px solid #1e293b', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
                   <div>
                     <div style={{ fontWeight: 'bold', color: '#fff' }}>
-                      {member.name} ({member.gender || 'Hero'}) {currentTurnName === member.name ? '👉 (Active Turn)' : ''}
+                      {member.name} ({member.gender || 'Hero'} • {member.alignment || 'True Neutral'}) {currentTurnName === member.name ? '👉 (Active Turn)' : ''}
                     </div>
                     <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
                       Lvl {member.level} {member.race} • {member.class} | AC: {member.ac || 12} | Gold: {member.gold || 0} GP
@@ -1089,7 +1101,7 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
         </div>
       )}
 
-      {/* TAB 5: TWO-WAY PARTY LOOT VAULT & NON-CLIPPING JOURNAL */}
+      {/* TAB 5: TWO-WAY PARTY LOOT VAULT & JOURNAL */}
       {activeTab === 'journal' && (
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', paddingBottom: '16px' }}>
           <div style={{ padding: '14px', background: '#0f172a', border: '1px solid #1e293b', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -1098,7 +1110,6 @@ export default function PlayerScreen({ gameState, activeCharacter, dispatchActio
               <span>Shared Party Loot Vault (Add or Take Items)</span>
             </h3>
 
-            {/* Add Custom Item Directly to Party Loot */}
             <form onSubmit={handleAddManualLoot} style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
               <input
                 type="text"

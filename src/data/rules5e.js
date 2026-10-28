@@ -1,3 +1,15 @@
+export const ALIGNMENTS_5E = [
+  'Lawful Good',
+  'Neutral Good',
+  'Chaotic Good',
+  'Lawful Neutral',
+  'True Neutral',
+  'Chaotic Neutral',
+  'Lawful Evil',
+  'Neutral Evil',
+  'Chaotic Evil'
+];
+
 export const SKILLS_5E = [
   { id: 'acrobatics', name: 'Acrobatics', stat: 'dex' },
   { id: 'animal_handling', name: 'Animal Handling', stat: 'wis' },
@@ -248,7 +260,6 @@ export const WEAPONS_LIST = [
   { name: 'Longbow', damageDice: '1d8', stat: 'dex', heavy: true, ranged: true, category: 'Martial Ranged' }
 ];
 
-// starter: true = legal Level 1 starting equipment; starter: false = must be looted/bought in-game
 export const ARMOR_LIST = [
   { name: 'Unarmored', base: 10, type: 'unarmored', starter: true },
   { name: 'Padded Armor', base: 11, type: 'light', starter: true },
